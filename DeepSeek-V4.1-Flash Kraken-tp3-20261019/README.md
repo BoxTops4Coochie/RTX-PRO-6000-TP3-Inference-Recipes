@@ -23,6 +23,36 @@ The container arms expert promotion by itself once `/health` answers (log line
 
 Host settings: 350 W/GPU, +6000 memory offset, ~256 GB host RAM, the checkpoint on an NVMe drive (Engram layer 14 is read from it while serving).
 
+## Update 2026-10-28: wider expert promotion (20-33) + 1.5 GiB reserve
+
+Config-only change on the same image (`20261019.3`) — widen the parked/promoted expert range and raise the
+promotion reserve. **llm-bench decode: 68.0 -> 72.3 engine steps/s @ 32K (+6.3%)**, no quality, KV, or prefill
+cost. This supersedes the "parking 20-29 instead of 20-25 — no further gain" note under
+[Measured and not adopted](#measured-and-not-adopted): that was a tok/s A/B, which can't resolve a ~6% gain through
+spec-decode acceptance noise; engine-steps/s does.
+
+| setting (compose `.env` / defaults) | was | now |
+| --- | --- | --- |
+| `DS41_OFFLOAD_TO` | `25` (layers 20-25, 6 layers) | **`33`** (layers 20-33, 14 layers) |
+| `RESERVE_BYTES` | `1073741824` (1 GiB) | **`1610612736`** (1.5 GiB) |
+| `restart` | `"no"` | **`"unless-stopped"`** (auto-start on host reboot) |
+| vLLM/Inductor/Triton compile caches | ephemeral (recompiled each `recreate`) | **persisted to `/cache`** (`VLLM_CACHE_ROOT=/cache/vllm`, `TORCHINDUCTOR_CACHE_DIR=/cache/inductor`, `TRITON_CACHE_DIR=/cache/triton`) |
+
+**Why it helps.** Spreading the fixed ~6 GiB of host-parked experts across 14 layers instead of 6 makes each
+layer's cold tail shallower (now ~20 of 24 chunks promoted per layer vs ~14), cutting the cold-expert fetch rate
+from ~6.7% to ~0.5% of routes. Free VRAM after promotion is now ~1.5 GiB (was 1 GiB).
+
+**The 1.5 GiB reserve is required at this range.** At 1 GiB, 20-33 runs ~5 MiB free after warm-up and throws
+repeated `expandable_segments: memory mapping failed with OOM` retries under concurrent long-context (the cuBLAS-crash
+precursor). At 1.5 GiB it holds ~480 MiB free under a 4x600K-token prefill-during-decode stress with zero retries.
+Run-to-run llm-bench noise is +/-1-2 steps (vLLM spec-decode batching is not bit-deterministic even at temperature
+0), so +6.3% is the two-run mean.
+
+**Limits.** Do not widen past ~34: offload 20-34/20-36 OOM at *load* because `DS41_VMM_COLD_FRACTION=1` host-maps
+every wrapped layer's experts up front before promotion trims them. Keep the dspark draft layers 37-39 resident.
+Lowering `DS41_VMM_COLD_FRACTION` below 1 to wrap more layers fits in memory but under-promotes (leaves VRAM unused)
+and loses the gain (20-36/20-39 at cf=0.2 measured 69.7/70.3 steps, below 20-33). Host GPUs were at 450 W here.
+
 ## Update 20261019.3: drafter head and top-p 1.0
 
 | Change | Effect |
