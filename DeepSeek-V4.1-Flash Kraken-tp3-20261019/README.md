@@ -283,6 +283,24 @@ temperature 1). These are **third-party weights** — we did not produce them or
 uncensoring numbers are the publisher's, not ours. A checkpoint in a different container (CSF, NVFP4, EXL3, GGUF,
 MLX) or with a changed tensor inventory (e.g. expert pruning) will **not** load here without conversion.
 
+**A second uncensored build also works.** `dealignai/DeepSeek-V4.1-Flash-1017-UNCENSORED-FP8` is another drop-in:
+same `deepseek_v41` FP8 layout (`quant_method: fp8`, `expert_dtype: fp4`, `scale_fmt: ue8m0`), 48 FP8 shards,
+**21 of them byte-identical to the stock model**. We fetched it (hardlinking the 21 shared shards from the cached
+stock `blobs/` by their LFS oid, so only the ~27 edited shards — ~186 GB of the ~475 GB repo — actually downloaded),
+verified all 49 LFS files' sha256 against the manifest (0 mismatches), and served it on `20261019.3` with no config
+change beyond `MODEL`. A light A/B (43 verifiable-answer questions + 37 edgy-but-legal refusal probes, temperature 0,
+two runs each) put both uncensored builds at stock-level capability and near-zero refusal on legal/edgy content:
+
+| | Stock `1017` | Abliterated | dealignai UNCENSORED-FP8 |
+| --- | --- | --- | --- |
+| Intelligence (/43, verifiable answers) | 41-42 | 42 | 41-43 |
+| Refusals on 37 edgy-but-legal prompts | 2-4 | 0 | 1 |
+
+All three are within the ±1-2 run-to-run noise on intelligence; stock refuses a handful of the edgy prompts,
+abliterated none, dealignai ~one. This is our own lighter harness, not the full suite above, and these are again
+**third-party weights we did not produce or audit**; stock `1017` is itself only lightly refusal-tuned on
+everyday content, so neither variant was benchmarked against genuinely harmful requests.
+
 ## Known limitations
 
 - Promotion happens on the warm-up request after `/health`; requests that arrive before the
