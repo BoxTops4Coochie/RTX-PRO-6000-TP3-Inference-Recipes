@@ -27,7 +27,7 @@ Host settings: 350 W/GPU, +6000 memory offset, ~256 GB host RAM, the checkpoint 
 
 Config-only change on the same image (`20261019.3`). **llm-inference-bench 32k c1: 72 -> 79.5 engine steps/s
 (+10%), 214 tok/s; coding peak 336 mean / 374 max tok/s.** No quality, KV, or prefill cost. Ships as
-[`expert-order-blend/`](expert-order-blend/) + `B12X_EXPERT_ORDER_DIR` in `compose.yaml` (now the default), plus three
+[`expert-order-blend/`](expert-order-blend/) + `B12X_EXPERT_ORDER_DIR` in `compose.yaml` (now the default), plus four
 KV presets in [`.env.example`](.env.example) switched with [`kv.sh`](kv.sh).
 
 **What was wrong.** A torch-profiler timeline of the decode step showed the 14 host-parked layers (20-33) costing
@@ -47,11 +47,12 @@ holds ~1.5% cold on both. Parked-layer MoE kernels now average 100 us = resident
 | **fast** (default) | 2.25 GiB | 2.18M tok | 2.1 | 20/24 + 19/24 | **79.5** | 214 | **336 / 374** |
 | balanced | 4.75 GiB | 4.61M tok | 4.4 | 17/24 + 18/24 | 75.7 | 205 | 304 / 326 |
 | max | 6.5 GiB | 6.31M tok | 6.0 | 16/24 + 16/24 | 71.4 | 186 | 276 / 295 |
+| xl | 8.75 GiB | 8.50M tok | 8.1 | 14/24 + 15/24 | 68.1 | 163 | 250 / 271 |
 
 Switch presets either way (both restart the server, ~3 min):
 
 ```bash
-# compose-native: one overlay file per preset (kv-fast.yaml / kv-balanced.yaml / kv-max.yaml)
+# compose-native: one overlay file per preset (kv-fast.yaml / kv-balanced.yaml / kv-max.yaml / kv-xl.yaml)
 docker compose -f compose.yaml -f kv-max.yaml up -d --force-recreate
 # or the helper, which flips the active line in .env and recreates
 ./kv.sh balanced
@@ -59,7 +60,9 @@ docker compose -f compose.yaml -f kv-max.yaml up -d --force-recreate
 
 The KV pool is allocated before promotion, so raising `KV_CACHE_MEMORY_BYTES` simply leaves fewer experts promoted;
 with a good order the first ~2.5 GiB costs ~5%, the next ~1.75 GiB another ~5% (the trimmed experts are ones both
-workloads use). `max` still matches the pre-update baseline (72) while tripling KV. Measured at 450 W/GPU with
+workloads use), and `xl` (8 x 1M sessions) another ~5% with coding peak down to 250. `max` still matches the
+pre-update baseline (72) while tripling KV; `xl` is for when eight concurrent 1M-token sessions matter more than
+single-stream speed. Measured at 450 W/GPU with
 `llm-inference-bench` (`--concurrency 1 --contexts 32k --duration 30 --coding-peak`); steps/s is MTP-normalized.
 
 **Build an order for your own traffic.** Set `B12X_EXPERT_ROUTES_ALL=1`, restart, run real traffic (aim for
