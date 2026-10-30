@@ -63,7 +63,19 @@ with a good order the first ~2.5 GiB costs ~5%, the next ~1.75 GiB another ~5% (
 workloads use), and `8x` another ~5% with coding peak down to 250. `6x` still matches the pre-update baseline (72) while
 tripling KV. Note `max-num-seqs` is 4 in `ds41-launch.yaml`: above `4x` the extra KV is not used by concurrent
 decode but by **prefix caching** — more previous contexts stay resident, so agent sessions that re-send long
-conversations skip their prefill. Stress tests per preset: pending (see below). Measured at 450 W/GPU with
+conversations skip their prefill.
+
+**Stress test per preset** — 4 concurrent *unique* ~600K-token prompts (no prefix-cache hits), in waves until >=1.15x
+the KV pool has been pushed through (forces eviction), with a short-prompt pinger running throughout
+(prefill-during-decode); min free VRAM sampled every 2 s; container log scanned for OOM / mapping-failure /
+preemption / cuBLAS lines. PASS = every request OK, zero bad log lines, healthy after.
+
+| preset | prompt tokens pushed | long requests | pinger | min free VRAM | bad log lines | result |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8x | 11.95M (1.4x pool) | 20/20 | 6/6 | 517 MiB (steady) | 0 | **PASS** (25.8 min) |
+| 6x | | | | | | pending |
+| 4x | | | | | | pending |
+| 2x | | | | | | pending | Measured at 450 W/GPU with
 `llm-inference-bench` (`--concurrency 1 --contexts 32k --duration 30 --coding-peak`); steps/s is MTP-normalized.
 
 **Build an order for your own traffic.** Set `B12X_EXPERT_ROUTES_ALL=1`, restart, run real traffic (aim for
