@@ -1,0 +1,7 @@
+# KV preset "max": 6.5 GiB -> 6.31M tokens (6.0 x 1M). Most KV, slowest: 71.4 steps/s, coding 276/295. Promotion 16/24 + 16/24.
+# Usage: docker compose -f compose.yaml -f kv-max.yaml up -d --force-recreate
+# (Overrides KV_CACHE_MEMORY_BYTES from .env; the VRAM comes out of expert promotion.)
+services:
+  ds41-kraken-tp3:
+    environment:
+      KV_CACHE_MEMORY_BYTES: "6979321856"
