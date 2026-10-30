@@ -1,0 +1,27 @@
+=== 16:23 preset 8x: GPU KV cache size: 8,499,917 tokens ===
+[8x] capacity=8,499,917 tok -> 5 waves x 4 x ~530,000 tok unique prompts (+ pinger)
+  wave 1/5: 4/4 ok, 2,390,177 prompt tok, 300s, minfree so far 517 MiB
+  wave 2/5: 4/4 ok, 2,390,623 prompt tok, 309s, minfree so far 517 MiB
+  wave 3/5: 4/4 ok, 2,390,247 prompt tok, 309s, minfree so far 517 MiB
+  wave 4/5: 4/4 ok, 2,390,643 prompt tok, 311s, minfree so far 517 MiB
+  wave 5/5: 4/4 ok, 2,390,920 prompt tok, 312s, minfree so far 517 MiB
+[8x] PASS: 20/20 long requests ok, pinger 6/6 ok, 11,952,610 prompt tok pushed, min free VRAM 517 MiB (760 samples), health=200, bad log lines=0, wall 25.8 min
+=== 16:53 preset 6x: GPU KV cache size: 6,314,130 tokens ===
+[6x] capacity=6,314,130 tok -> 4 waves x 4 x ~530,000 tok unique prompts (+ pinger)
+  wave 1/4: 4/4 ok, 2,390,414 prompt tok, 305s, minfree so far 537 MiB
+  wave 2/4: 4/4 ok, 2,390,530 prompt tok, 308s, minfree so far 537 MiB
+  wave 3/4: 4/4 ok, 2,390,510 prompt tok, 310s, minfree so far 537 MiB
+  wave 4/4: 4/4 ok, 2,390,128 prompt tok, 309s, minfree so far 537 MiB
+[6x] PASS: 16/16 long requests ok, pinger 6/6 ok, 9,561,582 prompt tok pushed, min free VRAM 537 MiB (607 samples), health=200, bad log lines=0, wall 20.6 min
+=== 17:17 preset 4x: GPU KV cache size: 4,614,187 tokens ===
+[4x] capacity=4,614,187 tok -> 3 waves x 4 x ~530,000 tok unique prompts (+ pinger)
+  wave 1/3: 4/4 ok, 2,390,260 prompt tok, 299s, minfree so far 541 MiB
+  wave 2/3: 4/4 ok, 2,390,299 prompt tok, 306s, minfree so far 519 MiB
+  wave 3/3: 4/4 ok, 2,390,691 prompt tok, 307s, minfree so far 519 MiB
+[4x] PASS: 12/12 long requests ok, pinger 5/5 ok, 7,171,250 prompt tok pushed, min free VRAM 519 MiB (450 samples), health=200, bad log lines=0, wall 15.3 min
+=== 17:36 preset 2x: GPU KV cache size: 2,185,581 tokens ===
+[2x] capacity=2,185,581 tok -> 2 waves x 4 x ~530,000 tok unique prompts (+ pinger)
+  wave 1/2: 4/4 ok, 2,390,162 prompt tok, 296s, minfree so far 521 MiB
+  wave 2/2: 4/4 ok, 2,390,717 prompt tok, 303s, minfree so far 517 MiB
+[2x] PASS: 8/8 long requests ok, pinger 3/3 ok, 4,780,879 prompt tok pushed, min free VRAM 517 MiB (295 samples), health=200, bad log lines=0, wall 10.0 min
+ALL DONE 17:46

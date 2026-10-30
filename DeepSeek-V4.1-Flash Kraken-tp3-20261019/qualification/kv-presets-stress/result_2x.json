@@ -1,0 +1,14 @@
+{
+ "preset": "2x",
+ "capacity": 2185581,
+ "verdict": "PASS",
+ "waves": 2,
+ "long_ok": 8,
+ "long_total": 8,
+ "ping_ok": 3,
+ "ping_total": 3,
+ "prompt_tokens": 4780879,
+ "min_free_mib": 517,
+ "bad_log_lines": [],
+ "wall_min": 10.0349911570549
+}

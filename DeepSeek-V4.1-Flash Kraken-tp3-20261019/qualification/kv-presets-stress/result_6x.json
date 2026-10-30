@@ -1,0 +1,14 @@
+{
+ "preset": "6x",
+ "capacity": 6314130,
+ "verdict": "PASS",
+ "waves": 4,
+ "long_ok": 16,
+ "long_total": 16,
+ "ping_ok": 6,
+ "ping_total": 6,
+ "prompt_tokens": 9561582,
+ "min_free_mib": 537,
+ "bad_log_lines": [],
+ "wall_min": 20.58878209988276
+}
