@@ -68,14 +68,16 @@ conversations skip their prefill.
 **Stress test per preset** — 4 concurrent *unique* ~600K-token prompts (no prefix-cache hits), in waves until >=1.15x
 the KV pool has been pushed through (forces eviction), with a short-prompt pinger running throughout
 (prefill-during-decode); min free VRAM sampled every 2 s; container log scanned for OOM / mapping-failure /
-preemption / cuBLAS lines. PASS = every request OK, zero bad log lines, healthy after.
+preemption / cuBLAS lines. PASS = every request OK, zero bad log lines, healthy after. **All four presets pass**; min free VRAM sits at the
+1.5 GiB reserve minus the serving arenas (~520 MiB) regardless of the KV/promotion split, with zero OOM-mapping
+retries — the reserve, not the KV size, is what governs stability here.
 
 | preset | prompt tokens pushed | long requests | pinger | min free VRAM | bad log lines | result |
 | --- | --- | --- | --- | --- | --- | --- |
 | 8x | 11.95M (1.4x pool) | 20/20 | 6/6 | 517 MiB (steady) | 0 | **PASS** (25.8 min) |
 | 6x | 9.56M (1.5x pool) | 16/16 | 6/6 | 537 MiB (steady) | 0 | **PASS** (20.6 min) |
 | 4x | 7.17M (1.6x pool) | 12/12 | 5/5 | 519 MiB (steady) | 0 | **PASS** (15.3 min) |
-| 2x | | | | | | pending | Measured at 450 W/GPU with
+| 2x | 4.78M (2.2x pool) | 8/8 | 3/3 | 517 MiB (steady) | 0 | **PASS** (10.0 min) | Measured at 450 W/GPU with
 `llm-inference-bench` (`--concurrency 1 --contexts 32k --duration 30 --coding-peak`); steps/s is MTP-normalized.
 
 **Build an order for your own traffic.** Set `B12X_EXPERT_ROUTES_ALL=1`, restart, run real traffic (aim for
