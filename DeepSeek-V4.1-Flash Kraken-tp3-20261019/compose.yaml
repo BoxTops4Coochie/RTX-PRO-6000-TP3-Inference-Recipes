@@ -2,14 +2,17 @@
 # (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/).
 # Defaults: original deepseek-ai weights (MXFP4 experts, lossless), DSpark 5 drafts with
 # every draft verified, 1M context, 4096-token prefill chunks, KV 2,185,581 tokens
-# (2.08x 1M), expert layers 20-25 parked in host RAM with their hottest experts promoted
-# to GPU after startup, Engram layer 1 in host RAM and layer 14 read from the checkpoint.
-# Needs 3x 96 GB GPUs and ~256 GB host RAM (~150 GB used). Tested at 350 W/GPU.
+# (2.08x 1M; see .env.example for the 4.4x / 6x presets), expert layers 20-33 parked in
+# host RAM with their most-routed experts promoted to GPU after startup using the
+# expert-order-blend/ order built from real traffic (2026-10-30), Engram layer 1 in host
+# RAM and layer 14 read from the checkpoint. Needs 3x 96 GB GPUs and ~256 GB host RAM
+# (~150 GB used). Tested at 450 W/GPU (350 W works; power only affects prefill).
 services:
   ds41-kraken-tp3:
     image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.3}"
     container_name: ds41-kraken-tp3
-    restart: "no"
+    # unless-stopped: auto-start on host reboot / daemon restart, but respect a manual `stop`.
+    restart: "unless-stopped"
     stop_grace_period: 90s
     ipc: host
     # io_uring (disk Engram reads) needs seccomp unconfined; pinned host memory needs memlock.
@@ -34,20 +37,41 @@ services:
       # b12x compile/tuning caches and the promotion arm file; a fresh volume makes the
       # first start ~10 minutes longer while kernels compile.
       - runtime-cache:/cache
+      # Expert promotion order built from real traffic (see B12X_EXPERT_ORDER_DIR below).
+      - ./expert-order-blend:/opt/ds41/expert-order-blend:ro
     environment:
       # Weights repo (from HF_CACHE_DIR). Any checkpoint in the original FP8 layout is a drop-in;
       # e.g. MODEL=mrfakename/DeepSeek-V4.1-Flash-1017-abliterated. See README "Alternative weights".
       MODEL: "${MODEL:-deepseek-ai/DeepSeek-V4.1-Flash-1017}"
-      # Fixed KV pool per GPU. 2.25 GiB = 2,185,581 tokens at 4096-token chunks.
+      # Fixed KV pool per GPU. 2.25 GiB = 2,185,581 tokens. More KV comes out of expert
+      # promotion (fewer hot experts): 4.75 GiB = 4.61M tokens (~-5% decode), 6.5 GiB =
+      # 6.31M tokens (~-12%). Presets + measured numbers in .env.example (`./kv.sh`).
       KV_CACHE_MEMORY_BYTES: "${KV_CACHE_MEMORY_BYTES:-2415919104}"
       # Expert layers (ordinals FROM..TO) kept in host RAM at startup; after the server is
       # healthy, their most-routed experts move to GPU memory until RESERVE bytes remain free.
-      # 20-25 measured best (20-22: -5% decode, -10% at 4 users; 20-29: no further gain).
+      # 20-33 (14 layers) measured best on llm-bench: 72.3 decode steps @32K vs 68.0 at
+      # the old 20-25 (+6.3%). Widening spreads the fixed ~6 GiB of parking thinner per
+      # layer (cold-fetch rate ~6.7%->0.5%); the win needs the 1.5 GiB reserve below (at
+      # 1 GiB, 20-33 throws OOM-mapping retries under concurrent long-context). Do NOT go
+      # past ~34 (20-34/36 OOM at load: cold chunks for too many layers exhaust host RAM),
+      # and keep the draft layers 37-39 resident. cf=0.2 to wrap more layers under-promotes
+      # and loses. See release README-tuning.md.
       DS41_OFFLOAD_FROM_ORDINAL: "${DS41_OFFLOAD_FROM:-20}"
-      DS41_OFFLOAD_TO_ORDINAL: "${DS41_OFFLOAD_TO:-25}"
-      # GPU memory left free after promotion: prefill scratch for 4096-token chunks.
-      # 768 MiB runs out of memory on a 31K-token prompt.
-      B12X_DEFERRED_BANK_RESERVE_BYTES: "${RESERVE_BYTES:-1073741824}"
+      DS41_OFFLOAD_TO_ORDINAL: "${DS41_OFFLOAD_TO:-33}"
+      # GPU memory left free after promotion: prefill scratch for 4096-token chunks AND
+      # the serving cushion. 1.5 GiB pairs with 20-33 (stress-clean, min free ~480 MiB
+      # under 4x600K concurrent); 1 GiB paired with the old 20-25. 768 MiB OOMs a 31K prompt.
+      B12X_DEFERRED_BANK_RESERVE_BYTES: "${RESERVE_BYTES:-1610612736}"
+      # Promotion order: per-layer expert route counts (expert-routes-rank0-layer<L>.json,
+      # "counts" = 384 ints); the loader relabels each parked layer so its most-routed experts
+      # fill the promoted prefix. expert-order-blend/ = 0.6 real coding traffic (544K routed
+      # tokens) + 0.4 prose (109K), measured +10% decode steps vs the image's baked order
+      # (which came from an 18K-token sample and left ~15% of routes cold). Point at
+      # /opt/ds41/expert-order to use the baked order. README: "Update 2026-10-30".
+      B12X_EXPERT_ORDER_DIR: "${B12X_EXPERT_ORDER_DIR:-/opt/ds41/expert-order-blend}"
+      # 1 = count expert routes on every layer and dump /cache/all-expert-routes-rank<r>-layer<L>.json
+      # every 30 s (cumulative) to build your own order. ~0.5-1% decode while on. See README.
+      B12X_EXPERT_ROUTES_ALL: "${B12X_EXPERT_ROUTES_ALL:-0}"
       # Engram layers whose tables live in pinned host RAM (31.5 GiB per GPU worker each).
       # Both tables (1,14) do not fit next to the parked expert layers on 256 GB.
       DS41_ENGRAM_RAM_LAYERS: "${ENGRAM_RAM_LAYERS:-1}"
@@ -59,6 +83,12 @@ services:
       VLLM_DS41_DRAFT_NVFP4_HEAD: "${DRAFT_NVFP4_HEAD:-1}"
       # Mount a different lil launcher settings file here to change context, drafts or chunking.
       DS41_LAUNCH_SETTINGS: "${DS41_LAUNCH_SETTINGS:-/etc/ds41/launch.yaml}"
+      # Persist vLLM/Inductor/Triton compile caches to the runtime-cache volume too (default
+      # is the container's ephemeral layer, recompiled on every `recreate`). The heavy b12x +
+      # FlashInfer JIT caches already live under /cache; this covers the rest.
+      VLLM_CACHE_ROOT: "${VLLM_CACHE_ROOT:-/cache/vllm}"
+      TORCHINDUCTOR_CACHE_DIR: "${TORCHINDUCTOR_CACHE_DIR:-/cache/inductor}"
+      TRITON_CACHE_DIR: "${TRITON_CACHE_DIR:-/cache/triton}"
       HF_HUB_OFFLINE: "1"
 volumes:
   runtime-cache:

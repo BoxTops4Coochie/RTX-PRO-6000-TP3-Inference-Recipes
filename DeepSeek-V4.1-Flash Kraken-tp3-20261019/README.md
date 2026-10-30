@@ -23,6 +23,52 @@ The container arms expert promotion by itself once `/health` answers (log line
 
 Host settings: 350 W/GPU, +6000 memory offset, ~256 GB host RAM, the checkpoint on an NVMe drive (Engram layer 14 is read from it while serving).
 
+## Update 2026-10-30: expert promotion order from real traffic (+10% decode) + KV presets
+
+Config-only change on the same image (`20261019.3`). **llm-inference-bench 32k c1: 72 -> 79.5 engine steps/s
+(+10%), 214 tok/s; coding peak 336 mean / 374 max tok/s.** No quality, KV, or prefill cost. Ships as
+[`expert-order-blend/`](expert-order-blend/) + `B12X_EXPERT_ORDER_DIR` in `compose.yaml` (now the default), plus three
+KV presets in [`.env.example`](.env.example) switched with [`kv.sh`](kv.sh).
+
+**What was wrong.** A torch-profiler timeline of the decode step showed the 14 host-parked layers (20-33) costing
+~2x on their MoE kernel — 1.1 ms of every 14 ms step — because 15% of their routes hit experts that were *not*
+promoted and had to be read over PCIe inside the kernel. The image's baked order predicted <0.1% cold: it was built
+from a **17.8K-token sample**, far too small to rank the tail of 384 experts per layer, so the 64 "cold" experts per
+layer were mostly *unobserved*, not cold. Resident layers run ~95 us per MoE call; parked layers ran 130-320 us.
+
+**The fix.** Count routes on real traffic (`B12X_EXPERT_ROUTES_ALL=1`, 544K routed tokens of coding work) and rebuild
+the order. A **code-only** order put the parked layers at resident speed on code but **collapsed to 54 steps/s on
+this prose benchmark** (code and prose share only ~285 of 320 hot experts per layer). The shipped order is a
+**blend of normalized distributions: 0.6 coding traffic + 0.4 prose** (109K tokens of the bench's own decode), which
+holds ~1.5% cold on both. Parked-layer MoE kernels now average 100 us = resident.
+
+| preset (`./kv.sh`) | KV | capacity | 1M slots | promotion w13 / w2 | steps/s @32k c1 | tok/s | coding mean / max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **fast** (default) | 2.25 GiB | 2.18M tok | 2.1 | 20/24 + 19/24 | **79.5** | 214 | **336 / 374** |
+| balanced | 4.75 GiB | 4.61M tok | 4.4 | 17/24 + 18/24 | 75.7 | 205 | 304 / 326 |
+| max | 6.5 GiB | 6.31M tok | 6.0 | 16/24 + 16/24 | 69.4 | 180 | 273 / 285 |
+
+The KV pool is allocated before promotion, so raising `KV_CACHE_MEMORY_BYTES` simply leaves fewer experts promoted;
+with a good order the first ~2.5 GiB costs ~5%, the next ~1.75 GiB another ~8% (the trimmed experts are ones both
+workloads use). `max` still matches the pre-update baseline while tripling KV. Measured at 450 W/GPU with
+`llm-inference-bench` (`--concurrency 1 --contexts 32k --duration 30 --coding-peak`); steps/s is MTP-normalized.
+
+**Build an order for your own traffic.** Set `B12X_EXPERT_ROUTES_ALL=1`, restart, run real traffic (aim for
+>=500K routed tokens; decode rows only, all ~6 speculative candidates per step count). Every 30 s each layer dumps
+`/cache/all-expert-routes-rank<r>-layer<L>.json` with cumulative `counts`. **Pitfall:** the counter sees expert ids
+*after* the hot-first relabel, so for the parked layers (20-33) the counts are indexed by *slot of the order that was
+loaded*, not by expert id — un-permute with `order = sorted(range(384), key=lambda e: (-loaded_counts[e], e))`,
+`by_expert[order[s]] = counts[s]` before writing a new `expert-routes-rank0-layer<L>.json`. Feeding slot-space counts
+straight in produced an anti-correlated order (54 steps/s). Resident layers are already in expert-id space. Blend
+distributions (normalize each sample, weight, sum) if you serve more than one kind of workload; a single-workload
+order is fragile. Set the toggle back to 0 when done (~0.5-1% while counting).
+
+**Also measured, not adopted:** per-layer routing concentration says 20-33 is already the best 14-layer parking window
+(layers 0-19 are 2-4x less concentrated); CPU-side expert compute is a dead end on this box (DDR5 ~175 GB/s vs GDDR7
+~1.8 TB/s: one CPU expert takes as long as the GPU's whole 6-expert layer); the CPU governor is irrelevant (host stall
+0.05 ms/step). Remaining step overhead is ~1,400 launch-bound kernels (<5 us, 2.5 ms/step) and ~1.1 ms of all-reduce
+— engine-level work, not config.
+
 ## Update 2026-10-28: wider expert promotion (20-33) + 1.5 GiB reserve
 
 Config-only change on the same image (`20261019.3`) — widen the parked/promoted expert range and raise the
