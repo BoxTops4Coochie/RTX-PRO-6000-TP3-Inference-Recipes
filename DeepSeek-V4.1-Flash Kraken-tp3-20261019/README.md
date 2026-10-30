@@ -46,11 +46,11 @@ holds ~1.5% cold on both. Parked-layer MoE kernels now average 100 us = resident
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | **fast** (default) | 2.25 GiB | 2.18M tok | 2.1 | 20/24 + 19/24 | **79.5** | 214 | **336 / 374** |
 | balanced | 4.75 GiB | 4.61M tok | 4.4 | 17/24 + 18/24 | 75.7 | 205 | 304 / 326 |
-| max | 6.5 GiB | 6.31M tok | 6.0 | 16/24 + 16/24 | 69.4 | 180 | 273 / 285 |
+| max | 6.5 GiB | 6.31M tok | 6.0 | 16/24 + 16/24 | 71.4 | 186 | 276 / 295 |
 
 The KV pool is allocated before promotion, so raising `KV_CACHE_MEMORY_BYTES` simply leaves fewer experts promoted;
-with a good order the first ~2.5 GiB costs ~5%, the next ~1.75 GiB another ~8% (the trimmed experts are ones both
-workloads use). `max` still matches the pre-update baseline while tripling KV. Measured at 450 W/GPU with
+with a good order the first ~2.5 GiB costs ~5%, the next ~1.75 GiB another ~5% (the trimmed experts are ones both
+workloads use). `max` still matches the pre-update baseline (72) while tripling KV. Measured at 450 W/GPU with
 `llm-inference-bench` (`--concurrency 1 --contexts 32k --duration 30 --coding-peak`); steps/s is MTP-normalized.
 
 **Build an order for your own traffic.** Set `B12X_EXPERT_ROUTES_ALL=1`, restart, run real traffic (aim for

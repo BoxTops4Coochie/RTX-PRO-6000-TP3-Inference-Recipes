@@ -45,7 +45,7 @@ services:
       MODEL: "${MODEL:-deepseek-ai/DeepSeek-V4.1-Flash-1017}"
       # Fixed KV pool per GPU. 2.25 GiB = 2,185,581 tokens. More KV comes out of expert
       # promotion (fewer hot experts): 4.75 GiB = 4.61M tokens (~-5% decode), 6.5 GiB =
-      # 6.31M tokens (~-12%). Presets + measured numbers in .env.example (`./kv.sh`).
+      # 6.31M tokens (~-10%). Presets + measured numbers in .env.example (`./kv.sh`).
       KV_CACHE_MEMORY_BYTES: "${KV_CACHE_MEMORY_BYTES:-2415919104}"
       # Expert layers (ordinals FROM..TO) kept in host RAM at startup; after the server is
       # healthy, their most-routed experts move to GPU memory until RESERVE bytes remain free.
