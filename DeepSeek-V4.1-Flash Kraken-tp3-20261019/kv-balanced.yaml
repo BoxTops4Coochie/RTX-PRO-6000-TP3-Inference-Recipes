@@ -1,7 +1,0 @@
-# KV preset "balanced": 4.75 GiB -> 4.61M tokens (4.4 x 1M). 75.7 steps/s, coding 304/326. Promotion 17/24 + 18/24.
-# Usage: docker compose -f compose.yaml -f kv-balanced.yaml up -d --force-recreate
-# (Overrides KV_CACHE_MEMORY_BYTES from .env; the VRAM comes out of expert promotion.)
-services:
-  ds41-kraken-tp3:
-    environment:
-      KV_CACHE_MEMORY_BYTES: "5100273664"

@@ -42,27 +42,28 @@ this prose benchmark** (code and prose share only ~285 of 320 hot experts per la
 **blend of normalized distributions: 0.6 coding traffic + 0.4 prose** (109K tokens of the bench's own decode), which
 holds ~1.5% cold on both. Parked-layer MoE kernels now average 100 us = resident.
 
-| preset (`./kv.sh`) | KV | capacity | 1M slots | promotion w13 / w2 | steps/s @32k c1 | tok/s | coding mean / max |
+| preset (`./kv.sh`, `kv-<preset>.yaml`) = x 1M-token sessions | KV | capacity | 1M sessions | promotion w13 / w2 | steps/s @32k c1 | tok/s | coding mean / max |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **fast** (default) | 2.25 GiB | 2.18M tok | 2.1 | 20/24 + 19/24 | **79.5** | 214 | **336 / 374** |
-| balanced | 4.75 GiB | 4.61M tok | 4.4 | 17/24 + 18/24 | 75.7 | 205 | 304 / 326 |
-| max | 6.5 GiB | 6.31M tok | 6.0 | 16/24 + 16/24 | 71.4 | 186 | 276 / 295 |
-| xl | 8.75 GiB | 8.50M tok | 8.1 | 14/24 + 15/24 | 68.1 | 163 | 250 / 271 |
+| **2x** (default) | 2.25 GiB | 2.18M tok | 2.1 | 20/24 + 19/24 | **79.5** | 214 | **336 / 374** |
+| 4x | 4.75 GiB | 4.61M tok | 4.4 | 17/24 + 18/24 | 75.7 | 205 | 304 / 326 |
+| 6x | 6.5 GiB | 6.31M tok | 6.0 | 16/24 + 16/24 | 71.4 | 186 | 276 / 295 |
+| 8x | 8.75 GiB | 8.50M tok | 8.1 | 14/24 + 15/24 | 68.1 | 163 | 250 / 271 |
 
 Switch presets either way (both restart the server, ~3 min):
 
 ```bash
-# compose-native: one overlay file per preset (kv-fast.yaml / kv-balanced.yaml / kv-max.yaml / kv-xl.yaml)
-docker compose -f compose.yaml -f kv-max.yaml up -d --force-recreate
+# compose-native: one overlay file per preset (kv-2x.yaml / kv-4x.yaml / kv-6x.yaml / kv-8x.yaml)
+docker compose -f compose.yaml -f kv-6x.yaml up -d --force-recreate
 # or the helper, which flips the active line in .env and recreates
-./kv.sh balanced
+./kv.sh 4x
 ```
 
 The KV pool is allocated before promotion, so raising `KV_CACHE_MEMORY_BYTES` simply leaves fewer experts promoted;
 with a good order the first ~2.5 GiB costs ~5%, the next ~1.75 GiB another ~5% (the trimmed experts are ones both
-workloads use), and `xl` (8 x 1M sessions) another ~5% with coding peak down to 250. `max` still matches the
-pre-update baseline (72) while tripling KV; `xl` is for when eight concurrent 1M-token sessions matter more than
-single-stream speed. Measured at 450 W/GPU with
+workloads use), and `8x` another ~5% with coding peak down to 250. `6x` still matches the pre-update baseline (72) while
+tripling KV. Note `max-num-seqs` is 4 in `ds41-launch.yaml`: above `4x` the extra KV is not used by concurrent
+decode but by **prefix caching** — more previous contexts stay resident, so agent sessions that re-send long
+conversations skip their prefill. Stress tests per preset: pending (see below). Measured at 450 W/GPU with
 `llm-inference-bench` (`--concurrency 1 --contexts 32k --duration 30 --coding-peak`); steps/s is MTP-normalized.
 
 **Build an order for your own traffic.** Set `B12X_EXPERT_ROUTES_ALL=1`, restart, run real traffic (aim for

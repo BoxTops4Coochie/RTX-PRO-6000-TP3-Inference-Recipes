@@ -1,0 +1,7 @@
+# KV preset "2x": 2.25 GiB -> 2.18M tokens (2.1 x 1M). Fastest: 79.5 steps/s, coding 336/374 tok/s. Promotion 20/24 + 19/24.
+# Usage: docker compose -f compose.yaml -f kv-2x.yaml up -d --force-recreate
+# (Overrides KV_CACHE_MEMORY_BYTES from .env; the VRAM comes out of expert promotion.)
+services:
+  ds41-kraken-tp3:
+    environment:
+      KV_CACHE_MEMORY_BYTES: "2415919104"
