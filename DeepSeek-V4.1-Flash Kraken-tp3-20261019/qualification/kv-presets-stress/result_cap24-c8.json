@@ -1,0 +1,14 @@
+{
+ "preset": "cap24-c8",
+ "capacity": 2185581,
+ "verdict": "PASS",
+ "waves": 2,
+ "long_ok": 16,
+ "long_total": 16,
+ "ping_ok": 127,
+ "ping_total": 127,
+ "prompt_tokens": 9562635,
+ "min_free_mib": 593,
+ "bad_log_lines": [],
+ "wall_min": 25.795907735824585
+}

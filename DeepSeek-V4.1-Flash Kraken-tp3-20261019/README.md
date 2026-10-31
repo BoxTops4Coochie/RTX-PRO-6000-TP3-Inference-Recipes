@@ -1,4 +1,4 @@
-# DeepSeek-V4.1-Flash-1017 Kraken TP3 — 20261019.4
+# DeepSeek-V4.1-Flash-1017 Kraken TP3 — 20261019.5
 
 DeepSeek-V4.1-Flash-1017 served at **tensor parallel 3 with the full 1M-token context** on three 96 GB RTX PRO 6000
 Blackwell cards, from DeepSeek's **original weights** (FP8 dense layers, MXFP4 routed experts; nothing requantized).
@@ -7,7 +7,9 @@ Weights: [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-
 `1bae0e1088993b9b82de08f59de5be5a34e42170` (MIT). Runtime: Local Inference Lab's vLLM "karmic-kraken" image
 (`karmic-kraken-beta-20261016.2`) with FlashInfer `main` b12x and the TP3 changes in `src/`.
 
-Image: **`azallaza/ds41-kraken-tp3:20261019.4`** (`sha256:f199d858632f7332b5bc7257cb873b844b910620dc8078f817faa43b82bee2ae`) =
+Image: **`azallaza/ds41-kraken-tp3:20261019.5`** (`sha256:69e22541612734ca1e72c2a0a1d1a61e8fa5c167997e11ba6ef29cfa27cb5dfc`) = `20261019.4`
+(`sha256:f199d858632f7332b5bc7257cb873b844b910620dc8078f817faa43b82bee2ae`) + the cap-only adaptive-verification patch
+(`patch-rowcap/`, one file; see [Update 2026-10-31 (b)](#update-2026-10-31-b-cap-only-adaptive-verification-c6-24-c8-23-c1c4-unchanged)); `20261019.4` =
 `20261019.3` (`sha256:c4c2de529da6d3762951e7f5c5b696866f20d740a5f16d9cdda0f13786352646`) + the MXFP4-Engram / NVFP4 patches
 (`patch-nvfp4/`), inert for the stock weights; `.3` remains valid for the stock checkpoint.
 Same code as `20261019` (`sha256:54836f9d…`, 13.0 GB download, 45.1 GB unpacked); `20261019.2` added
@@ -16,7 +18,7 @@ Same code as `20261019` (`sha256:54836f9d…`, 13.0 GB download, 45.1 GB unpacke
 previous tag, so pulling it over an earlier one downloads ~120 KB.
 
 ```bash
-docker pull azallaza/ds41-kraken-tp3:20261019.4
+docker pull azallaza/ds41-kraken-tp3:20261019.5
 HF_CACHE_DIR=/path/to/huggingface docker compose up -d     # port 15015, model name DeepSeek-V4.1-Flash
 ```
 
@@ -24,6 +26,58 @@ The container arms expert promotion by itself once `/health` answers (log line
 `ds41-serve: expert promotion armed and warmed`); serve traffic after that line for full speed.
 
 Host settings: 350 W/GPU, +6000 memory offset, ~256 GB host RAM, the checkpoint on an NVMe drive (Engram layer 14 is read from it while serving).
+
+## Update 2026-10-31 (b): cap-only adaptive verification — c6 +24%, c8 +23%, c1/c4 unchanged
+
+New image tag **`azallaza/ds41-kraken-tp3:20261019.5`** (`sha256:69e22541612734ca1e72c2a0a1d1a61e8fa5c167997e11ba6ef29cfa27cb5dfc`) =
+`20261019.4` plus one patched file
+([`patch-rowcap/adaptive_verification.py`](patch-rowcap/adaptive_verification.py), vLLM's DSpark adaptive-verification
+manager). Enabled by default here (`ds41-launch.yaml` `adaptive-verification: true` + `DS41_VERIFY_ROW_CAP=24` in
+`compose.yaml`); inert for anyone who leaves `adaptive-verification: false`.
+
+**The problem.** With 5 drafts, every decoding request costs 6 verify rows per step. At 8 users that is 48 rows, and
+the MoE decode cost grows with the distinct experts those rows route to, so the step slows while most of the tail
+drafts are rejected anyway. vLLM's upstream `adaptive-verification` fixes that with a profiled cost model, but the
+model also trims a **lone** request to ~2 drafts (acceptance 2.3 instead of 2.85), costing 11% at c1 at any cost
+scale, because on this hybrid-offload stack a 6-row step genuinely costs ~25% more than a 3-row one and the manager's
+confidence estimator never re-learns the drafts it stops admitting.
+
+**The fix.** Keep the manager's machinery — one global draft-row budget per step, rows handed to the drafts with the
+highest survival probability across all requests — but replace its cost-model chooser with a row cap: verify every
+scheduled draft while the decoding requests' total target rows fit under the cap, trim only above it. Prefill chunks
+sharing the step are not counted, so they cannot starve the decoders. 24 rows = 4 requests untouched; at 8 requests
+each keeps its 2 best drafts.
+
+| 32k, `llm-inference-bench`, tok/s | c1 (per user) | c4 aggregate | c6 aggregate | c8 aggregate (per user) |
+| --- | --- | --- | --- | --- |
+| `.4` default: every draft verified | 212-228 (3 runs) | 460 | 512 | 611 (76) |
+| upstream adaptive, cost scale 0.5 | 211 | - | - | 741 (93) |
+| cap-only 32 | 233 | 450 | - | 688 (86) |
+| **cap-only 24 (default now)** | **219-224 (3 runs)** | **460** | **635** | **752 (94)** |
+
+c1 steps/s is 83 on both the old default and cap 24, and the engine's draft counters show 5.00 drafts verified per
+step at c1 and c4 under the cap (nothing trimmed); the c1 spread is run-to-run acceptance variance (2.55-2.71) at
+temperature 1.0. **c8 KV stress PASS** on cap 24 (same harness as the max-num-seqs 8 qualification: 2 waves x 8 unique
+~530K-token prompts through the 2.18M pool + pinger; 16/16 + 127/127 ok, 9.56M prompt tokens, min free VRAM 593 MiB,
+0 bad log lines, 25.8 min; [`result_cap24-c8.json`](qualification/kv-presets-stress/result_cap24-c8.json)). No loop
+flags in any cap run.
+
+Knobs: `DS41_VERIFY_ROW_CAP=24` (default), `32` (5 requests untouched, c8 688), `0` = upstream's cost-model adaptive;
+`adaptive-verification: false` in `ds41-launch.yaml` = the previous behaviour (every draft at any concurrency).
+
+**k=7 coding preset** ([`k7.yaml`](k7.yaml) -> [`ds41-launch-k7.yaml`](ds41-launch-k7.yaml): 7 drafts, graphs 64, cap 32 so
+4 requests stay untouched). Seven drafts only pay where acceptance is high, i.e. code; everywhere else the two extra
+rows make every step slower (the step really does 8 rows of MoE routing instead of 6: c1 83 -> 74 steps/s):
+
+| 32k | c1 prose tok/s | coding peak mean / max | c4 aggregate | c8 aggregate |
+| --- | --- | --- | --- | --- |
+| k=5, cap 24 (default) | 216-228 | 336-341 / 367-374 | 443-460 | 735-752 |
+| k=7, no cap | 192 | 351 / 400 | 369 | - |
+| k=7, cap 32 | 182 | 349 / 388 | 377 | 657 |
+
+Draft counters confirm 7.00 drafts verified per step at c1 and c4 under cap 32. Switch with
+`docker compose -f compose.yaml -f k7.yaml up -d --force-recreate` for a coding session; plain
+`docker compose up -d --force-recreate` returns to the default.
 
 ## Update 2026-10-31: 4-bit Engram tables (half the Engram host RAM, +6% decode) + NVFP4 expert support
 
@@ -99,31 +153,8 @@ the `6x`/`8x` presets mean genuinely concurrent 1M-token sessions; spare KV beyo
 **prefix caching** (re-sent long conversations skip their prefill). At 32k: c1 84 steps/s, c4 460 tok/s aggregate,
 c8 611 tok/s aggregate (76 per user).
 
-**Throughput preset for 5+ concurrent users: adaptive speculative verification** ([`adaptive.yaml`](adaptive.yaml)
-overlay -> [`ds41-launch-adaptive.yaml`](ds41-launch-adaptive.yaml)). By default every request verifies all 5 DSpark
-drafts (6 rows per request per step). With `adaptive-verification` the engine prices each extra draft row against its
-profiled step-cost table and verifies fewer drafts when the step is crowded. Measured at 32k (`llm-inference-bench`,
-tok/s = client-visible output tokens/s):
-
-| setting | c1 (per user) | c4 aggregate | c8 aggregate (per user) |
-| --- | --- | --- | --- |
-| default: every draft verified | **238** | 460 | 611 (76) |
-| adaptive, cost scale 1.0 | 172 | 463 | 726 (91) |
-| **adaptive, cost scale 0.5** (the overlay) | 211 | - | **741 (93)** |
-| adaptive, cost scale 0.25 | 215 | - | 688 (86) |
-
-So it is a +21% aggregate at c8 bought with -11% for a lone user, and neutral at c4. The lone-user loss is structural
-rather than a tuning miss: the cost table is a step function over the CUDA-graph sizes, and on this hybrid-offload
-model a 6-row verify step really does cost ~25% more than a 3-row one (MoE decode cost follows the number of distinct
-experts read), so a single request gets trimmed to ~2 drafts (acceptance 2.3 instead of 2.85) and the step savings
-don't pay back the lost tokens. Lower cost scales retain more drafts but 0.25 already gives back the c8 gain, and c1
-never recovers. Use it when the box serves a crowd; leave the default for 1-4 users:
-
-```bash
-docker compose -f compose.yaml -f adaptive.yaml up -d --force-recreate          # on
-docker compose -f compose.yaml -f adaptive.yaml -f kv-6x.yaml up -d --force-recreate   # with more KV
-docker compose up -d --force-recreate                                           # back to default
-```
+(An earlier opt-in overlay for upstream's cost-model adaptive verification was superseded the same day by the cap-only
+variant above, which beats it at every concurrency.)
 
 **Stress test per preset** — 4 concurrent *unique* ~600K-token prompts (no prefix-cache hits), in waves until >=1.15x
 the KV pool has been pushed through (forces eviction), with a short-prompt pinger running throughout
@@ -460,9 +491,10 @@ other GPU power limits.
   `coding-task/` (prompt, the model's two files, verification, server log),
   with `RESULTS.md` and the raw outputs. The 581K-token conversation used for long generation is not included.
 - `compose.yaml` (defaults: image `.4`, offload 20-33, 1.5 GiB reserve, blended expert order), `.env.example`,
-  `kv.sh` + `kv-2x/4x/6x/8x.yaml` (KV presets), `adaptive.yaml` + `ds41-launch-adaptive.yaml` (adaptive-verification
-  throughput preset for 5+ users), `compose.nvfp4.yaml` (dev overlay mounting the `patch-nvfp4/work/` sources
+  `kv.sh` + `kv-2x/4x/6x/8x.yaml` (KV presets), `k7.yaml` + `ds41-launch-k7.yaml` (7-draft coding preset), `compose.nvfp4.yaml` (dev overlay mounting the `patch-nvfp4/work/` sources
   instead of using the `.4` image), `expert-order-blend/` (route counts: 0.6 coding traffic + 0.4 prose).
+- `patch-rowcap/`: the cap-only adaptive-verification patch (`adaptive_verification.py`) and the `image/Dockerfile` that bakes
+  it into `.5` on top of `.4`.
 - `patch-nvfp4/`: the eight patched Python files (`work/`), the thin `image/Dockerfile` that bakes them into `.4`,
   `make_engram_nvidia_variant.py` (recommended: hard-link NVIDIA's Engram shards next to stock), `make_engram_mxfp4.py`
   (reference converter from the stock FP8 tables), `test_packed_lookup.py` (bit-exact decode check). Write-up:
@@ -477,7 +509,8 @@ other GPU power limits.
 | Variable | Default | Values |
 | --- | --- | --- |
 | `HF_CACHE_DIR` | required | Hugging Face cache containing the weights repo below |
-| `DS41_IMAGE` | `azallaza/ds41-kraken-tp3:20261019.4` | image tag; `.4` = `.3` + MXFP4-Engram/NVFP4 patches baked in (inert for stock weights) |
+| `DS41_VERIFY_ROW_CAP` | `24` | cap-only adaptive verification: all drafts verified while decoding requests' rows fit under the cap, trimmed above; `0` = upstream cost-model adaptive (needs `.5`) |
+| `DS41_IMAGE` | `azallaza/ds41-kraken-tp3:20261019.5` | image tag; `.5` = `.4` + cap-only adaptive verification; `.4` = `.3` + MXFP4-Engram/NVFP4 patches baked in (inert for stock weights) |
 | `B12X_EXPERT_ORDER_DIR` | `/opt/ds41/expert-order-blend` | expert promotion order (route counts); `/opt/ds41/expert-order` = the image's baked order |
 | `B12X_EXPERT_ROUTES_ALL` | `0` | `1` = dump per-layer route counts every 30 s to build your own order (~0.5-1% while on) |
 | `MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash-1017` | weights repo to serve; see [Alternative weights](#alternative-weights) and the 4-bit Engram variants in [README-engram-nvfp4.md](README-engram-nvfp4.md) (`local/DeepSeek-V4.1-Flash-1017-engram-nvidia` recommended) |
@@ -489,16 +522,16 @@ other GPU power limits.
 | `ENGRAM_RAM_LAYERS` | `1` | Engram layers held in pinned host RAM (empty = both read from disk). With the 4-bit Engram variants use `1,14` (2 x 16.2 GiB/rank): +5% decode |
 | `ENGRAM_ROW_CACHE_ROWS` | `8388608` | host row cache for disk Engram tables (rows of 256 B); `0` = off |
 | `DRAFT_NVFP4_HEAD` | `1` | DSpark drafter vocabulary head in NVFP4; `0` = BF16 |
-| `DS41_LAUNCH_SETTINGS` | `/etc/ds41/launch.yaml` | lil launcher settings (context, chunk size, drafts, Engram mode); `adaptive.yaml` points it at `ds41-launch-adaptive.yaml` (throughput preset) |
+| `DS41_LAUNCH_SETTINGS` | `/etc/ds41/launch.yaml` | lil launcher settings (context, chunk size, drafts, Engram mode) |
 
 ## compose.yaml
 
 ```yaml
-# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.4
+# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.5
 # (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/,
 #  + the 2026-10-31 MXFP4-Engram / NVFP4-expert patches in patch-nvfp4/, inert for stock weights).
 # Defaults: original deepseek-ai weights (MXFP4 experts, lossless), DSpark 5 drafts with
-# every draft verified, 8 concurrent sequences, 1M context, 4096-token prefill chunks, KV 2,185,581 tokens
+# cap-only adaptive verification (all 5 drafts verified up to 4 concurrent decodes), 8 concurrent sequences, 1M context, 4096-token prefill chunks, KV 2,185,581 tokens
 # (2.08x 1M; see .env.example for the 4.4x / 6x presets), expert layers 20-33 parked in
 # host RAM with their most-routed experts promoted to GPU after startup using the
 # expert-order-blend/ order built from real traffic (2026-10-30), Engram layer 1 in host
@@ -507,7 +540,7 @@ other GPU power limits.
 # and ~256 GB host RAM. Tested at 450 W/GPU (350 W works; power only affects prefill).
 services:
   ds41-kraken-tp3:
-    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.4}"
+    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.5}"
     container_name: ds41-kraken-tp3
     # unless-stopped: auto-start on host reboot / daemon restart, but respect a manual `stop`.
     restart: "unless-stopped"
@@ -573,6 +606,12 @@ services:
       # 1 = count expert routes on every layer and dump /cache/all-expert-routes-rank<r>-layer<L>.json
       # every 30 s (cumulative) to build your own order. ~0.5-1% decode while on. See README.
       B12X_EXPERT_ROUTES_ALL: "${B12X_EXPERT_ROUTES_ALL:-0}"
+      # Cap-only adaptive verification (image .5, ds41-launch.yaml adaptive-verification: true): every DSpark
+      # draft is verified while the decoding requests' total target rows (1 + drafts each) fit under this cap;
+      # above it drafts are trimmed, best-confidence first across requests. 24 = 4 requests untouched, c6 +24%,
+      # c8 +23% aggregate, c1/c4 unchanged (2026-10-31). 0 = upstream's cost-model adaptive (c1 -11%);
+      # to verify every draft at any concurrency set adaptive-verification: false in ds41-launch.yaml.
+      DS41_VERIFY_ROW_CAP: "${DS41_VERIFY_ROW_CAP:-24}"
       # Engram layers whose tables live in pinned host RAM (31.5 GiB per GPU worker each).
       # Both tables (1,14) do not fit next to the parked expert layers on 256 GB.
       DS41_ENGRAM_RAM_LAYERS: "${ENGRAM_RAM_LAYERS:-1}"

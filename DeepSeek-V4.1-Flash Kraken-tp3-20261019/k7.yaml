@@ -1,0 +1,11 @@
+# k=7 coding preset: 7 DSpark drafts + cap-only adaptive verification with a 32-row cap (4 requests untouched).
+# 32k, 2026-10-31: coding peak 351 mean / 400 max tok/s (k=5 default 336-341 / 367-374), but prose c1 192 vs ~220,
+# c4 369 vs 460, c8 657 vs 752. For single-user coding sessions; the default (k=5, cap 24) is better for everything else.
+# Usage: docker compose -f compose.yaml -f k7.yaml up -d --force-recreate      (plain `docker compose up -d --force-recreate` = back to default)
+services:
+  ds41-kraken-tp3:
+    environment:
+      DS41_LAUNCH_SETTINGS: /etc/ds41/launch-k7.yaml
+      DS41_VERIFY_ROW_CAP: "32"
+    volumes:
+      - ./ds41-launch-k7.yaml:/etc/ds41/launch-k7.yaml:ro
