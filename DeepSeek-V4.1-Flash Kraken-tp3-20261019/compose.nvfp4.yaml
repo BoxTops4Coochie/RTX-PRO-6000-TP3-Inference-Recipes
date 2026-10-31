@@ -1,0 +1,20 @@
+# Overlay: MXFP4-packed Engram tables + NVFP4 routed experts (online CSF scales, in-place VMM
+# offload) as mounted patches over the 20261019.3 image. NOT needed with DS41_IMAGE=
+# azallaza/ds41-kraken-tp3:20261019.4, which has the same eight files baked in (patch-nvfp4/image/).
+# Dev use: MODEL=<variant> docker compose -f compose.yaml -f compose.nvfp4.yaml up -d --force-recreate
+services:
+  ds41-kraken-tp3:
+    environment:
+      # a16 = W4A16 decode (lil's GLM/Qwen NVFP4 recipe), a4 = W4A4 everywhere
+      DS41_NVFP4_ACTIVATIONS: "${DS41_NVFP4_ACTIVATIONS:-a16}"
+      # FP4 activations for prefill rows under a16 — OFF: the hybrid assumes the target forward's padded token ordering and crashes with DS41 dspark forwards (expected 4091 rows, got 128)
+      B12X_W4A16_A4_PREFILL: "${B12X_W4A16_A4_PREFILL:-0}"
+    volumes:
+      - ./patch-nvfp4/work/engram_native__kernels.py:/opt/venv/lib/python3.12/site-packages/flashinfer/experimental/b12x/sequence/engram/_kernels.py:ro
+      - ./patch-nvfp4/work/engram_native__impl.py:/opt/venv/lib/python3.12/site-packages/flashinfer/experimental/b12x/sequence/engram/_impl.py:ro
+      - ./patch-nvfp4/work/engram_native__disk.py:/opt/venv/lib/python3.12/site-packages/flashinfer/experimental/b12x/sequence/engram/_disk.py:ro
+      - ./patch-nvfp4/work/engram_native__preparation.py:/opt/venv/lib/python3.12/site-packages/flashinfer/experimental/b12x/sequence/engram/_preparation.py:ro
+      - ./patch-nvfp4/work/engram_native__tuning.py:/opt/venv/lib/python3.12/site-packages/flashinfer/experimental/b12x/sequence/engram/_tuning.py:ro
+      - ./patch-nvfp4/work/engram.py:/opt/venv/lib/python3.12/site-packages/vllm/models/deepseek_v4_1/common/engram.py:ro
+      - ./patch-nvfp4/work/quant_config.py:/opt/venv/lib/python3.12/site-packages/vllm/models/deepseek_v4_1/quant_config.py:ro
+      - ./patch-nvfp4/work/b12x.py:/opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/b12x.py:ro

@@ -23,6 +23,29 @@ The container arms expert promotion by itself once `/health` answers (log line
 
 Host settings: 350 W/GPU, +6000 memory offset, ~256 GB host RAM, the checkpoint on an NVMe drive (Engram layer 14 is read from it while serving).
 
+## Update 2026-10-31: 4-bit Engram tables (half the Engram host RAM, +6% decode) + NVFP4 expert support
+
+New image tag **`azallaza/ds41-kraken-tp3:20261019.4`** = `20261019.3` plus eight patched Python files
+(`patch-nvfp4/`): MXFP4-packed Engram tables, NVFP4 routed experts with online CSF scales and in-place VMM
+promotion. Inert for the stock checkpoint. Full write-up with measurements, root causes and the rebuild
+procedure: **[README-engram-nvfp4.md](README-engram-nvfp4.md)**.
+
+| `MODEL=` | experts | Engram | decode @32k c1 | coding peak | eval |
+| --- | --- | --- | --- | --- | --- |
+| stock (default) | MXFP4-CSF lossless | FP8, 31.5 GiB/rank/layer | 79.5 steps/s | 336 / 374 | 41/43 |
+| **`local/DeepSeek-V4.1-Flash-1017-engram-mxfp4`** + `ENGRAM_RAM_LAYERS=1,14` | MXFP4-CSF lossless | **MXFP4 (lossy), 16.2 GiB** — built locally from stock in ~10 min | **84.4 steps/s** | 341 / 374 | 43/43 |
+| `local/DeepSeek-V4.1-Flash-1017-engram-nvidia` + `ENGRAM_RAM_LAYERS=1,14` | MXFP4-CSF lossless | NVIDIA's MXFP4 tables (hard-linked) | 84.5 steps/s | 361 / 386 | 42/43 |
+| `nvidia/DeepSeek-V4.1-Flash-1017-NVFP4` | NVFP4 (lossless re-container) | NVIDIA's MXFP4 | 73.8 steps/s (62.2 without online CSF) | 281 / 288 | 43/43 |
+
+The recommended "less resources" recipe is the first variant: `patch-nvfp4/make_engram_mxfp4.py` requantizes only
+the two Engram tables of the stock weights (identical quantization to NVIDIA's: same block scales on 100% of blocks),
+hard-links the other 46 shards, and with both tables in RAM the result is *faster* than stock because the
+disk-resident Engram layer was costing ~5% of decode. NVIDIA's checkpoint also works (first clean run of it on a
+3x96 GB hybrid-offload stack) but tops out ~13% slower: its E4M3 per-16 expert scales compress worse under CSF, and
+its W4A8 mode cannot take CSF. Two bugs worth knowing if you work on this: NVIDIA's `mtp.*` draft experts are still
+MXFP4 and must not be routed to the NVFP4 method (NaN drafts -> garbage only when sampling, 100% acceptance), and
+lil's a4-prefill hybrid (`B12X_W4A16_A4_PREFILL`) is incompatible with the dspark forward ordering.
+
 ## Update 2026-10-30: expert promotion order from real traffic (+10% decode) + KV presets
 
 Config-only change on the same image (`20261019.3`). **llm-inference-bench 32k c1: 72 -> 79.5 engine steps/s
