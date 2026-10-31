@@ -43,6 +43,13 @@ bellhop riddle; LEVEL arrangements = 30, which is correct — stock answered 60)
 are not bit-identical to stock (greedy paths diverge after the first slightly shifted token) but are equivalent in
 substance — the expected fingerprint of a lossy table, not degradation.
 
+
+**Concurrency beyond 4 (`ds41-launch-seqs8.yaml`).** `max-num-seqs` is 4 in the stock launcher settings; the
+`seqs8` variant raises it to 8 with graphs captured for 48 decode rows. On the recommended Engram variant at 32k:
+c1 83.6 steps/s / 238 tok/s (no single-stream cost), c4 460 tok/s aggregate (115/user), **c8 611 tok/s aggregate
+(76/user)**. KV capacity and promotion depth are unchanged. This is what makes the 6x/8x KV presets usable as true
+concurrent 1M-token sessions rather than prefix-cache headroom. `DS41_LAUNCH_SETTINGS=/etc/ds41/launch-seqs8.yaml`.
+
 **Why the Engram-only variant exists.** The user-visible win of NVIDIA's checkpoint is the Engram
 half (host RAM halved: both Engram layers now fit in RAM for what one costs today; 75 GiB less
 disk). The NVFP4 expert half gives nothing on this stack — same weight bytes — and costs ~20%

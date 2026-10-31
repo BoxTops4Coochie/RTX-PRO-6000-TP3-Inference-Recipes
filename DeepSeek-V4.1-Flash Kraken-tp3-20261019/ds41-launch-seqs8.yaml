@@ -1,0 +1,32 @@
+# lil launcher settings for DeepSeek-V4.1-Flash-1017 at TP3 (3x RTX PRO 6000).
+# TEST VARIANT: max-num-seqs 8 (graphs sized for 8 x 6 decode rows). Mounted as /etc/ds41/launch-seqs8.yaml.
+# Native vLLM flags (KV bytes, CPU offload) are passed after `--` by ds41-serve.
+options:
+  served-model-name: DeepSeek-V4.1-Flash
+  tensor-parallel-size: 3
+  # GPU prefix cache only. The LMCache host tier would need ~48 GiB of host RAM
+  # that the layer-1 Engram table and the parked expert layers already use.
+  cache-mode: vram
+  max-model-len: 1048576
+  max-num-seqs: 8
+  # 4096-token prefill chunks; needs the 1 GiB promotion reserve (2048 needs 512 MiB).
+  max-num-batched-tokens: 4096
+  max-cudagraph-capture-size: 48   # 8 seqs x (5 drafts + 1) decode rows
+  # KV is a fixed byte budget (--kv-cache-memory-bytes), so this only bounds startup.
+  gpu-memory-utilization: 0.93
+  # Up to 4 prefills share each step round-robin; a lone prefill keeps the full budget.
+  # A short request behind a ~420K-token prefill: TTFT 34-35 s with 1, 0.6 s with auto.
+  max-parallel-prefills: auto
+  prefill-policy: round-robin
+  # DSpark speculative decoding with 5 drafts, every draft verified.
+  mode: dspark
+  draft-tokens: 5
+  adaptive-verification: false
+  # Server-default sampling for requests that set none: the model card's temperature 1.0 and
+  # top_p 1.0 (the lil profile ships 0.95 from the older V4.1 launcher). Requests still override.
+  override-generation-config: {temperature: 1.0, top_p: 1.0}
+  # Engram: layer 1's table in pinned host RAM (DS41_ENGRAM_RAM_LAYERS=1), layer 14's
+  # read from the checkpoint with its scales resident in host RAM and a host row cache.
+  engram-table-memory: disk
+  engram-disk-resident-scales: true
+  jit-monitor-mode: warn
