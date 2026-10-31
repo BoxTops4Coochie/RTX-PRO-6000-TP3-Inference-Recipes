@@ -38,7 +38,8 @@ NVIDIA's files, and verify the result with `compare_models.py`-style checks befo
 **Correctness checks on the recommended configuration** (`engram-nvidia`, both tables in RAM, image `.4`): 43-item
 greedy eval 42/43 with 41/43 responses token-identical to stock (the two differences: equivalent wording on the
 bellhop riddle; LEVEL arrangements = 30, which is correct — stock answered 60); LiveBench coding **81.9** vs 81.3 stock
-(release 2024-11-25, temp 1.0, 32K budget, 0 truncations); hotel-lights c4 x30: see below. Open-ended generations
+(release 2024-11-25, temp 1.0, 32K budget, 0 truncations); hotel-lights c4 x30: **exact 30 / wrong 0 / truncated 0**
+(seed 103, 100K cap, reasoning effort max — same as the release qualification; raw results in `qualification/engram-nvidia/`). Open-ended generations
 are not bit-identical to stock (greedy paths diverge after the first slightly shifted token) but are equivalent in
 substance — the expected fingerprint of a lossy table, not degradation.
 
