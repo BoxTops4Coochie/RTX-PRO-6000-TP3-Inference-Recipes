@@ -44,11 +44,11 @@ are not bit-identical to stock (greedy paths diverge after the first slightly sh
 substance — the expected fingerprint of a lossy table, not degradation.
 
 
-**Concurrency beyond 4 (`ds41-launch-seqs8.yaml`).** `max-num-seqs` is 4 in the stock launcher settings; the
-`seqs8` variant raises it to 8 with graphs captured for 48 decode rows. On the recommended Engram variant at 32k:
-c1 83.6 steps/s / 238 tok/s (no single-stream cost), c4 460 tok/s aggregate (115/user), **c8 611 tok/s aggregate
-(76/user)**. KV capacity and promotion depth are unchanged. This is what makes the 6x/8x KV presets usable as true
-concurrent 1M-token sessions rather than prefix-cache headroom. `DS41_LAUNCH_SETTINGS=/etc/ds41/launch-seqs8.yaml`.
+**Concurrency: `max-num-seqs` is now 8 by default** (`ds41-launch.yaml`, mounted by `compose.yaml`; was 4). On the
+recommended Engram variant at 32k: c1 84 steps/s / 238 tok/s (no single-stream cost), c4 460 tok/s aggregate (115/user),
+**c8 611 tok/s aggregate (76/user)**. KV capacity and promotion depth unchanged. Stress at 8 concurrent 530K-token prompts
+oversubscribing the 2x pool 3.9x: 16/16 ok, pinger 124/124, min free VRAM 617 MiB, 0 errors (`qualification/kv-presets-
+stress/result_seqs8-c8.json`). Capturing 6-row-aligned CUDA-graph sizes measured neutral — padded rows are free.
 
 **Why the Engram-only variant exists.** The user-visible win of NVIDIA's checkpoint is the Engram
 half (host RAM halved: both Engram layers now fit in RAM for what one costs today; 75 GiB less

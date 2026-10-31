@@ -2,7 +2,7 @@
 # (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/,
 #  + the 2026-10-31 MXFP4-Engram / NVFP4-expert patches in patch-nvfp4/, inert for stock weights).
 # Defaults: original deepseek-ai weights (MXFP4 experts, lossless), DSpark 5 drafts with
-# every draft verified, 1M context, 4096-token prefill chunks, KV 2,185,581 tokens
+# every draft verified, 8 concurrent sequences, 1M context, 4096-token prefill chunks, KV 2,185,581 tokens
 # (2.08x 1M; see .env.example for the 4.4x / 6x presets), expert layers 20-33 parked in
 # host RAM with their most-routed experts promoted to GPU after startup using the
 # expert-order-blend/ order built from real traffic (2026-10-30), Engram layer 1 in host
@@ -39,6 +39,9 @@ services:
       # b12x compile/tuning caches and the promotion arm file; a fresh volume makes the
       # first start ~10 minutes longer while kernels compile.
       - runtime-cache:/cache
+      # Launcher settings from this release (max-num-seqs 8, graphs 48, 4096-token chunks, dspark k5) over the
+      # copy baked into the image (which still says max-num-seqs 4).
+      - ./ds41-launch.yaml:/etc/ds41/launch.yaml:ro
       # Expert promotion order built from real traffic (see B12X_EXPERT_ORDER_DIR below).
       - ./expert-order-blend:/opt/ds41/expert-order-blend:ro
     environment:

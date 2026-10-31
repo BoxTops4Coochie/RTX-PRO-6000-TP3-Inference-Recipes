@@ -8,10 +8,14 @@ options:
   # that the layer-1 Engram table and the parked expert layers already use.
   cache-mode: vram
   max-model-len: 1048576
-  max-num-seqs: 4
+  # 8 concurrent decodes (was 4). Stress-tested 2026-10-31: 8 x 530K unique prompts x 2 waves oversubscribing the
+  # 2x KV pool 3.9x, 16/16 ok, min free VRAM 617 MiB, 0 errors. 32k: c1 84 steps/s, c4 460 tok/s agg, c8 611 agg.
+  max-num-seqs: 8
   # 4096-token prefill chunks; needs the 1 GiB promotion reserve (2048 needs 512 MiB).
   max-num-batched-tokens: 4096
-  max-cudagraph-capture-size: 24
+  # CUDA graphs cover 8 seqs x (5 drafts + 1) = 48 decode rows. vLLM's default size list is fine: 6-aligned
+  # sizes measured neutral (padded rows are free; decode is weight-read-bound).
+  max-cudagraph-capture-size: 48
   # KV is a fixed byte budget (--kv-cache-memory-bytes), so this only bounds startup.
   gpu-memory-utilization: 0.93
   # Up to 4 prefills share each step round-robin; a lone prefill keeps the full budget.

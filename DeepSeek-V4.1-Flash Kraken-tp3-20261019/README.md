@@ -89,9 +89,10 @@ docker compose -f compose.yaml -f kv-6x.yaml up -d --force-recreate
 The KV pool is allocated before promotion, so raising `KV_CACHE_MEMORY_BYTES` simply leaves fewer experts promoted;
 with a good order the first ~2.5 GiB costs ~5%, the next ~1.75 GiB another ~5% (the trimmed experts are ones both
 workloads use), and `8x` another ~5% with coding peak down to 250. `6x` still matches the pre-update baseline (72) while
-tripling KV. Note `max-num-seqs` is 4 in `ds41-launch.yaml`: above `4x` the extra KV is not used by concurrent
-decode but by **prefix caching** — more previous contexts stay resident, so agent sessions that re-send long
-conversations skip their prefill.
+tripling KV. `max-num-seqs` is now 8 (`ds41-launch.yaml`, 2026-10-31; stress-tested at 8 concurrent 530K prompts), so
+the `6x`/`8x` presets mean genuinely concurrent 1M-token sessions; spare KV beyond the running sessions still feeds
+**prefix caching** (re-sent long conversations skip their prefill). At 32k: c1 84 steps/s, c4 460 tok/s aggregate,
+c8 611 tok/s aggregate (76 per user).
 
 **Stress test per preset** — 4 concurrent *unique* ~600K-token prompts (no prefix-cache hits), in waves until >=1.15x
 the KV pool has been pushed through (forces eviction), with a short-prompt pinger running throughout
@@ -408,7 +409,7 @@ everyday content, so neither variant was benchmarked against genuinely harmful r
 
 - Promotion happens on the warm-up request after `/health`; requests that arrive before the
   `expert promotion armed and warmed` log line run with parked layers 20-25 in host memory (slower decode).
-- Up to 4 concurrent sequences (`max-num-seqs: 4`, CUDA graphs up to 24 tokens).
+- Up to 8 concurrent sequences (`max-num-seqs: 8`, CUDA graphs up to 48 decode rows; was 4 until 2026-10-31).
 - Time to first token is ~0.25 s even for short prompts (fixed per-request host overhead of the eager prefill pass).
 
 ## Not tested
@@ -465,7 +466,7 @@ other GPU power limits.
 # (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/,
 #  + the 2026-10-31 MXFP4-Engram / NVFP4-expert patches in patch-nvfp4/, inert for stock weights).
 # Defaults: original deepseek-ai weights (MXFP4 experts, lossless), DSpark 5 drafts with
-# every draft verified, 1M context, 4096-token prefill chunks, KV 2,185,581 tokens
+# every draft verified, 8 concurrent sequences, 1M context, 4096-token prefill chunks, KV 2,185,581 tokens
 # (2.08x 1M; see .env.example for the 4.4x / 6x presets), expert layers 20-33 parked in
 # host RAM with their most-routed experts promoted to GPU after startup using the
 # expert-order-blend/ order built from real traffic (2026-10-30), Engram layer 1 in host
@@ -502,6 +503,9 @@ services:
       # b12x compile/tuning caches and the promotion arm file; a fresh volume makes the
       # first start ~10 minutes longer while kernels compile.
       - runtime-cache:/cache
+      # Launcher settings from this release (max-num-seqs 8, graphs 48, 4096-token chunks, dspark k5) over the
+      # copy baked into the image (which still says max-num-seqs 4).
+      - ./ds41-launch.yaml:/etc/ds41/launch.yaml:ro
       # Expert promotion order built from real traffic (see B12X_EXPERT_ORDER_DIR below).
       - ./expert-order-blend:/opt/ds41/expert-order-blend:ro
     environment:
