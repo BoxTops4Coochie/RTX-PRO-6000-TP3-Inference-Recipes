@@ -12,6 +12,9 @@ options:
   # 4096-token prefill chunks; needs the 1 GiB promotion reserve (2048 needs 512 MiB).
   max-num-batched-tokens: 4096
   max-cudagraph-capture-size: 48   # 8 seqs x (5 drafts + 1) decode rows
+  # Measured 2026-10-31: capturing 6-row-aligned graph sizes [1,2,4,6,8,12,16,18,24,30,36,42,48] instead of
+  # vLLM's default [1,2,4,8,16,24,32,40,48] changed nothing (c1 84.2 vs 83.6, c4 180.3 vs 180.4, c8 234.5 vs
+  # 236.8 steps/s): the decode step is weight-read-bound, padded rows are free. Left at the default.
   # KV is a fixed byte budget (--kv-cache-memory-bytes), so this only bounds startup.
   gpu-memory-utilization: 0.93
   # Up to 4 prefills share each step round-robin; a lone prefill keeps the full budget.
