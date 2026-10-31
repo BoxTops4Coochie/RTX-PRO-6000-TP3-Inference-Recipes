@@ -1,15 +1,17 @@
-# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.3
-# (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/).
+# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.4
+# (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/,
+#  + the 2026-10-31 MXFP4-Engram / NVFP4-expert patches in patch-nvfp4/, inert for stock weights).
 # Defaults: original deepseek-ai weights (MXFP4 experts, lossless), DSpark 5 drafts with
 # every draft verified, 1M context, 4096-token prefill chunks, KV 2,185,581 tokens
 # (2.08x 1M; see .env.example for the 4.4x / 6x presets), expert layers 20-33 parked in
 # host RAM with their most-routed experts promoted to GPU after startup using the
 # expert-order-blend/ order built from real traffic (2026-10-30), Engram layer 1 in host
-# RAM and layer 14 read from the checkpoint. Needs 3x 96 GB GPUs and ~256 GB host RAM
-# (~150 GB used). Tested at 450 W/GPU (350 W works; power only affects prefill).
+# RAM and layer 14 read from the checkpoint (with the 4-bit Engram variants set
+# ENGRAM_RAM_LAYERS=1,14 to hold both in RAM: faster, ~150 GB host). Needs 3x 96 GB GPUs
+# and ~256 GB host RAM. Tested at 450 W/GPU (350 W works; power only affects prefill).
 services:
   ds41-kraken-tp3:
-    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.3}"
+    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.4}"
     container_name: ds41-kraken-tp3
     # unless-stopped: auto-start on host reboot / daemon restart, but respect a manual `stop`.
     restart: "unless-stopped"

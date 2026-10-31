@@ -1,4 +1,4 @@
-# DeepSeek-V4.1-Flash-1017 Kraken TP3 — 20261019.3
+# DeepSeek-V4.1-Flash-1017 Kraken TP3 — 20261019.4
 
 DeepSeek-V4.1-Flash-1017 served at **tensor parallel 3 with the full 1M-token context** on three 96 GB RTX PRO 6000
 Blackwell cards, from DeepSeek's **original weights** (FP8 dense layers, MXFP4 routed experts; nothing requantized).
@@ -7,14 +7,16 @@ Weights: [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-
 `1bae0e1088993b9b82de08f59de5be5a34e42170` (MIT). Runtime: Local Inference Lab's vLLM "karmic-kraken" image
 (`karmic-kraken-beta-20261016.2`) with FlashInfer `main` b12x and the TP3 changes in `src/`.
 
-Image: **`azallaza/ds41-kraken-tp3:20261019.3`** (`sha256:c4c2de529da6d3762951e7f5c5b696866f20d740a5f16d9cdda0f13786352646`).
+Image: **`azallaza/ds41-kraken-tp3:20261019.4`** (`sha256:f199d858632f7332b5bc7257cb873b844b910620dc8078f817faa43b82bee2ae`) =
+`20261019.3` (`sha256:c4c2de529da6d3762951e7f5c5b696866f20d740a5f16d9cdda0f13786352646`) + the MXFP4-Engram / NVFP4 patches
+(`patch-nvfp4/`), inert for the stock weights; `.3` remains valid for the stock checkpoint.
 Same code as `20261019` (`sha256:54836f9d…`, 13.0 GB download, 45.1 GB unpacked); `20261019.2` added
 `max-parallel-prefills: auto`, and `20261019.3` the NVFP4 drafter head and top-p 1.0 as the server default (see
 [Update 20261019.3](#update-202610193-drafter-head-and-top-p-10)). Each shares all but three small layers with the
 previous tag, so pulling it over an earlier one downloads ~120 KB.
 
 ```bash
-docker pull azallaza/ds41-kraken-tp3:20261019.3
+docker pull azallaza/ds41-kraken-tp3:20261019.4
 HF_CACHE_DIR=/path/to/huggingface docker compose up -d     # port 15015, model name DeepSeek-V4.1-Flash
 ```
 
@@ -135,7 +137,7 @@ spec-decode acceptance noise; engine-steps/s does.
 | setting (compose `.env` / defaults) | was | now |
 | --- | --- | --- |
 | `DS41_OFFLOAD_TO` | `25` (layers 20-25, 6 layers) | **`33`** (layers 20-33, 14 layers) |
-| `RESERVE_BYTES` | `1073741824` (1 GiB) | **`1610612736`** (1.5 GiB) |
+| `RESERVE_BYTES` | `1610612736` | GPU memory left free after promotion (1.5 GiB pairs with 20-33; stress-clean) |
 | `restart` | `"no"` | **`"unless-stopped"`** (auto-start on host reboot) |
 | vLLM/Inductor/Triton compile caches | ephemeral (recompiled each `recreate`) | **persisted to `/cache`** (`VLLM_CACHE_ROOT=/cache/vllm`, `TORCHINDUCTOR_CACHE_DIR=/cache/inductor`, `TRITON_CACHE_DIR=/cache/triton`) |
 
@@ -425,6 +427,14 @@ other GPU power limits.
   `stress_kv.py`, `prefill_fairness.py` (short request behind a long prefill), `parallel-prefills/` (the `auto` rechecks),
   `coding-task/` (prompt, the model's two files, verification, server log),
   with `RESULTS.md` and the raw outputs. The 581K-token conversation used for long generation is not included.
+- `compose.yaml` (defaults: image `.4`, offload 20-33, 1.5 GiB reserve, blended expert order), `.env.example`,
+  `kv.sh` + `kv-2x/4x/6x/8x.yaml` (KV presets), `compose.nvfp4.yaml` (dev overlay mounting the `patch-nvfp4/work/` sources
+  instead of using the `.4` image), `expert-order-blend/` (route counts: 0.6 coding traffic + 0.4 prose).
+- `patch-nvfp4/`: the eight patched Python files (`work/`), the thin `image/Dockerfile` that bakes them into `.4`,
+  `make_engram_nvidia_variant.py` (recommended: hard-link NVIDIA's Engram shards next to stock), `make_engram_mxfp4.py`
+  (reference converter from the stock FP8 tables), `test_packed_lookup.py` (bit-exact decode check). Write-up:
+  `README-engram-nvfp4.md`. Tuning notes: `README-tuning.md`.
+- `qualification/kv-presets-stress/`: the per-preset KV oversubscription stress harness, log and results.
 - `bench-20261019.3/`: the `20261019.3` measurements (same scripts).
 - `bench/`: the measurements above (`quick`, `prefill_real_code`, `llm_decode_bench`, `llm_decode_bench_prefill`,
   `needle_983k`) and the scripts that produced them: `bench.py` (quick), `prefill_real.py`, `bench_long.py` (needle).
@@ -434,13 +444,16 @@ other GPU power limits.
 | Variable | Default | Values |
 | --- | --- | --- |
 | `HF_CACHE_DIR` | required | Hugging Face cache containing the weights repo below |
-| `MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash-1017` | weights repo to serve; see [Alternative weights](#alternative-weights) |
+| `DS41_IMAGE` | `azallaza/ds41-kraken-tp3:20261019.4` | image tag; `.4` = `.3` + MXFP4-Engram/NVFP4 patches baked in (inert for stock weights) |
+| `B12X_EXPERT_ORDER_DIR` | `/opt/ds41/expert-order-blend` | expert promotion order (route counts); `/opt/ds41/expert-order` = the image's baked order |
+| `B12X_EXPERT_ROUTES_ALL` | `0` | `1` = dump per-layer route counts every 30 s to build your own order (~0.5-1% while on) |
+| `MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash-1017` | weights repo to serve; see [Alternative weights](#alternative-weights) and the 4-bit Engram variants in [README-engram-nvfp4.md](README-engram-nvfp4.md) (`local/DeepSeek-V4.1-Flash-1017-engram-nvidia` recommended) |
 | `HOST_PORT` | `15015` | host port for the OpenAI-compatible API |
 | `GPU0`/`GPU1`/`GPU2` | `0`/`1`/`2` | GPU indices |
-| `KV_CACHE_MEMORY_BYTES` | `2415919104` | KV bytes per GPU; more KV leaves less for promoted experts |
-| `DS41_OFFLOAD_FROM` / `DS41_OFFLOAD_TO` | `20` / `25` | parked expert layers (ordinals) |
-| `RESERVE_BYTES` | `1073741824` | GPU memory left free after promotion; 4096-token chunks need 1 GiB |
-| `ENGRAM_RAM_LAYERS` | `1` | Engram layers held in pinned host RAM (empty = both read from disk) |
+| `KV_CACHE_MEMORY_BYTES` | `2415919104` | KV bytes per GPU; more KV leaves less for promoted experts. Presets 2x/4x/6x/8x: `./kv.sh` or `kv-<preset>.yaml` |
+| `DS41_OFFLOAD_FROM` / `DS41_OFFLOAD_TO` | `20` / `33` | parked expert layers (ordinals); 20-33 measured best, do not pass ~34 |
+| `RESERVE_BYTES` | `1610612736` | GPU memory left free after promotion (1.5 GiB pairs with 20-33; stress-clean) |
+| `ENGRAM_RAM_LAYERS` | `1` | Engram layers held in pinned host RAM (empty = both read from disk). With the 4-bit Engram variants use `1,14` (2 x 16.2 GiB/rank): +5% decode |
 | `ENGRAM_ROW_CACHE_ROWS` | `8388608` | host row cache for disk Engram tables (rows of 256 B); `0` = off |
 | `DRAFT_NVFP4_HEAD` | `1` | DSpark drafter vocabulary head in NVFP4; `0` = BF16 |
 | `DS41_LAUNCH_SETTINGS` | `/etc/ds41/launch.yaml` | lil launcher settings (context, chunk size, drafts, Engram mode) |
@@ -448,18 +461,23 @@ other GPU power limits.
 ## compose.yaml
 
 ```yaml
-# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.3
-# (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/).
+# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.4
+# (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/,
+#  + the 2026-10-31 MXFP4-Engram / NVFP4-expert patches in patch-nvfp4/, inert for stock weights).
 # Defaults: original deepseek-ai weights (MXFP4 experts, lossless), DSpark 5 drafts with
 # every draft verified, 1M context, 4096-token prefill chunks, KV 2,185,581 tokens
-# (2.08x 1M), expert layers 20-25 parked in host RAM with their hottest experts promoted
-# to GPU after startup, Engram layer 1 in host RAM and layer 14 read from the checkpoint.
-# Needs 3x 96 GB GPUs and ~256 GB host RAM (~150 GB used). Tested at 350 W/GPU.
+# (2.08x 1M; see .env.example for the 4.4x / 6x presets), expert layers 20-33 parked in
+# host RAM with their most-routed experts promoted to GPU after startup using the
+# expert-order-blend/ order built from real traffic (2026-10-30), Engram layer 1 in host
+# RAM and layer 14 read from the checkpoint (with the 4-bit Engram variants set
+# ENGRAM_RAM_LAYERS=1,14 to hold both in RAM: faster, ~150 GB host). Needs 3x 96 GB GPUs
+# and ~256 GB host RAM. Tested at 450 W/GPU (350 W works; power only affects prefill).
 services:
   ds41-kraken-tp3:
-    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.3}"
+    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.4}"
     container_name: ds41-kraken-tp3
-    restart: "no"
+    # unless-stopped: auto-start on host reboot / daemon restart, but respect a manual `stop`.
+    restart: "unless-stopped"
     stop_grace_period: 90s
     ipc: host
     # io_uring (disk Engram reads) needs seccomp unconfined; pinned host memory needs memlock.
@@ -484,20 +502,41 @@ services:
       # b12x compile/tuning caches and the promotion arm file; a fresh volume makes the
       # first start ~10 minutes longer while kernels compile.
       - runtime-cache:/cache
+      # Expert promotion order built from real traffic (see B12X_EXPERT_ORDER_DIR below).
+      - ./expert-order-blend:/opt/ds41/expert-order-blend:ro
     environment:
       # Weights repo (from HF_CACHE_DIR). Any checkpoint in the original FP8 layout is a drop-in;
       # e.g. MODEL=mrfakename/DeepSeek-V4.1-Flash-1017-abliterated. See README "Alternative weights".
       MODEL: "${MODEL:-deepseek-ai/DeepSeek-V4.1-Flash-1017}"
-      # Fixed KV pool per GPU. 2.25 GiB = 2,185,581 tokens at 4096-token chunks.
+      # Fixed KV pool per GPU. 2.25 GiB = 2,185,581 tokens. More KV comes out of expert
+      # promotion (fewer hot experts): 4.75 GiB = 4.61M tokens (~-5% decode), 6.5 GiB =
+      # 6.31M tokens (~-10%), 8.75 GiB = 8.50M tokens (~-14%). Presets + measured numbers in .env.example (`./kv.sh`).
       KV_CACHE_MEMORY_BYTES: "${KV_CACHE_MEMORY_BYTES:-2415919104}"
       # Expert layers (ordinals FROM..TO) kept in host RAM at startup; after the server is
       # healthy, their most-routed experts move to GPU memory until RESERVE bytes remain free.
-      # 20-25 measured best (20-22: -5% decode, -10% at 4 users; 20-29: no further gain).
+      # 20-33 (14 layers) measured best on llm-bench: 72.3 decode steps @32K vs 68.0 at
+      # the old 20-25 (+6.3%). Widening spreads the fixed ~6 GiB of parking thinner per
+      # layer (cold-fetch rate ~6.7%->0.5%); the win needs the 1.5 GiB reserve below (at
+      # 1 GiB, 20-33 throws OOM-mapping retries under concurrent long-context). Do NOT go
+      # past ~34 (20-34/36 OOM at load: cold chunks for too many layers exhaust host RAM),
+      # and keep the draft layers 37-39 resident. cf=0.2 to wrap more layers under-promotes
+      # and loses. See release README-tuning.md.
       DS41_OFFLOAD_FROM_ORDINAL: "${DS41_OFFLOAD_FROM:-20}"
-      DS41_OFFLOAD_TO_ORDINAL: "${DS41_OFFLOAD_TO:-25}"
-      # GPU memory left free after promotion: prefill scratch for 4096-token chunks.
-      # 768 MiB runs out of memory on a 31K-token prompt.
-      B12X_DEFERRED_BANK_RESERVE_BYTES: "${RESERVE_BYTES:-1073741824}"
+      DS41_OFFLOAD_TO_ORDINAL: "${DS41_OFFLOAD_TO:-33}"
+      # GPU memory left free after promotion: prefill scratch for 4096-token chunks AND
+      # the serving cushion. 1.5 GiB pairs with 20-33 (stress-clean, min free ~480 MiB
+      # under 4x600K concurrent); 1 GiB paired with the old 20-25. 768 MiB OOMs a 31K prompt.
+      B12X_DEFERRED_BANK_RESERVE_BYTES: "${RESERVE_BYTES:-1610612736}"
+      # Promotion order: per-layer expert route counts (expert-routes-rank0-layer<L>.json,
+      # "counts" = 384 ints); the loader relabels each parked layer so its most-routed experts
+      # fill the promoted prefix. expert-order-blend/ = 0.6 real coding traffic (544K routed
+      # tokens) + 0.4 prose (109K), measured +10% decode steps vs the image's baked order
+      # (which came from an 18K-token sample and left ~15% of routes cold). Point at
+      # /opt/ds41/expert-order to use the baked order. README: "Update 2026-10-30".
+      B12X_EXPERT_ORDER_DIR: "${B12X_EXPERT_ORDER_DIR:-/opt/ds41/expert-order-blend}"
+      # 1 = count expert routes on every layer and dump /cache/all-expert-routes-rank<r>-layer<L>.json
+      # every 30 s (cumulative) to build your own order. ~0.5-1% decode while on. See README.
+      B12X_EXPERT_ROUTES_ALL: "${B12X_EXPERT_ROUTES_ALL:-0}"
       # Engram layers whose tables live in pinned host RAM (31.5 GiB per GPU worker each).
       # Both tables (1,14) do not fit next to the parked expert layers on 256 GB.
       DS41_ENGRAM_RAM_LAYERS: "${ENGRAM_RAM_LAYERS:-1}"
@@ -509,6 +548,12 @@ services:
       VLLM_DS41_DRAFT_NVFP4_HEAD: "${DRAFT_NVFP4_HEAD:-1}"
       # Mount a different lil launcher settings file here to change context, drafts or chunking.
       DS41_LAUNCH_SETTINGS: "${DS41_LAUNCH_SETTINGS:-/etc/ds41/launch.yaml}"
+      # Persist vLLM/Inductor/Triton compile caches to the runtime-cache volume too (default
+      # is the container's ephemeral layer, recompiled on every `recreate`). The heavy b12x +
+      # FlashInfer JIT caches already live under /cache; this covers the rest.
+      VLLM_CACHE_ROOT: "${VLLM_CACHE_ROOT:-/cache/vllm}"
+      TORCHINDUCTOR_CACHE_DIR: "${TORCHINDUCTOR_CACHE_DIR:-/cache/inductor}"
+      TRITON_CACHE_DIR: "${TRITON_CACHE_DIR:-/cache/triton}"
       HF_HUB_OFFLINE: "1"
 volumes:
   runtime-cache:
