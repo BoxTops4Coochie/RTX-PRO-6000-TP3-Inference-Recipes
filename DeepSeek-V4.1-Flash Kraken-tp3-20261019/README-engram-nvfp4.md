@@ -34,6 +34,14 @@ next to the stock expert shards; download just those two files, ~98 GiB total). 
 nibble convention produces token salad (we hit exactly that once while writing it). Use it only if you cannot fetch
 NVIDIA's files, and verify the result with `compare_models.py`-style checks before serving.
 
+
+**Correctness checks on the recommended configuration** (`engram-nvidia`, both tables in RAM, image `.4`): 43-item
+greedy eval 42/43 with 41/43 responses token-identical to stock (the two differences: equivalent wording on the
+bellhop riddle; LEVEL arrangements = 30, which is correct — stock answered 60); LiveBench coding **81.9** vs 81.3 stock
+(release 2024-11-25, temp 1.0, 32K budget, 0 truncations); hotel-lights c4 x30: see below. Open-ended generations
+are not bit-identical to stock (greedy paths diverge after the first slightly shifted token) but are equivalent in
+substance — the expected fingerprint of a lossy table, not degradation.
+
 **Why the Engram-only variant exists.** The user-visible win of NVIDIA's checkpoint is the Engram
 half (host RAM halved: both Engram layers now fit in RAM for what one costs today; 75 GiB less
 disk). The NVFP4 expert half gives nothing on this stack — same weight bytes — and costs ~20%
