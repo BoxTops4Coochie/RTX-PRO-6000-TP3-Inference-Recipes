@@ -39,6 +39,11 @@ procedure: **[README-engram-nvfp4.md](README-engram-nvfp4.md)**.
 | `local/DeepSeek-V4.1-Flash-1017-engram-mxfp4` + `ENGRAM_RAM_LAYERS=1,14` | MXFP4-CSF lossless | our MXFP4 tables, built locally with the converter | 84.4 steps/s | 341 / 374 | 43/43 |
 | `nvidia/DeepSeek-V4.1-Flash-1017-NVFP4` | NVFP4 (lossless re-container) | NVIDIA's MXFP4 | 73.8 steps/s (62.2 without online CSF) | 281 / 288 | 43/43 |
 
+**Correctness of the recommended variant** (NVIDIA's 4-bit Engram tables, both in RAM, image `.4`): LiveBench coding
+**81.9** vs 81.3 stock (release 2024-11-25, temp 1.0, 32K budget, 0 truncations); hotel-lights 30 runs @ c4 **30 exact / 0
+wrong / 0 truncated**; 43-item greedy eval 42/43 with 41/43 answers token-identical to stock. Our converted tables: eval
+43/43, same speed (LiveBench not run on them). Details in [README-engram-nvfp4.md](README-engram-nvfp4.md).
+
 **Recommended recipe: stock experts + NVIDIA's Engram tables.** Download only the two NVIDIA shards that hold the
 Engram tables (~49 GiB each) and run `patch-nvfp4/make_engram_nvidia_variant.py`: it hard-links them next to the 46
 stock expert shards and writes the config — no quantization step, nothing to get wrong. With both tables in RAM
