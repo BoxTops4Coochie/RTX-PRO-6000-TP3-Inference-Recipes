@@ -99,6 +99,32 @@ the `6x`/`8x` presets mean genuinely concurrent 1M-token sessions; spare KV beyo
 **prefix caching** (re-sent long conversations skip their prefill). At 32k: c1 84 steps/s, c4 460 tok/s aggregate,
 c8 611 tok/s aggregate (76 per user).
 
+**Throughput preset for 5+ concurrent users: adaptive speculative verification** ([`adaptive.yaml`](adaptive.yaml)
+overlay -> [`ds41-launch-adaptive.yaml`](ds41-launch-adaptive.yaml)). By default every request verifies all 5 DSpark
+drafts (6 rows per request per step). With `adaptive-verification` the engine prices each extra draft row against its
+profiled step-cost table and verifies fewer drafts when the step is crowded. Measured at 32k (`llm-inference-bench`,
+tok/s = client-visible output tokens/s):
+
+| setting | c1 (per user) | c4 aggregate | c8 aggregate (per user) |
+| --- | --- | --- | --- |
+| default: every draft verified | **238** | 460 | 611 (76) |
+| adaptive, cost scale 1.0 | 172 | 463 | 726 (91) |
+| **adaptive, cost scale 0.5** (the overlay) | 211 | - | **741 (93)** |
+| adaptive, cost scale 0.25 | 215 | - | 688 (86) |
+
+So it is a +21% aggregate at c8 bought with -11% for a lone user, and neutral at c4. The lone-user loss is structural
+rather than a tuning miss: the cost table is a step function over the CUDA-graph sizes, and on this hybrid-offload
+model a 6-row verify step really does cost ~25% more than a 3-row one (MoE decode cost follows the number of distinct
+experts read), so a single request gets trimmed to ~2 drafts (acceptance 2.3 instead of 2.85) and the step savings
+don't pay back the lost tokens. Lower cost scales retain more drafts but 0.25 already gives back the c8 gain, and c1
+never recovers. Use it when the box serves a crowd; leave the default for 1-4 users:
+
+```bash
+docker compose -f compose.yaml -f adaptive.yaml up -d --force-recreate          # on
+docker compose -f compose.yaml -f adaptive.yaml -f kv-6x.yaml up -d --force-recreate   # with more KV
+docker compose up -d --force-recreate                                           # back to default
+```
+
 **Stress test per preset** — 4 concurrent *unique* ~600K-token prompts (no prefix-cache hits), in waves until >=1.15x
 the KV pool has been pushed through (forces eviction), with a short-prompt pinger running throughout
 (prefill-during-decode); min free VRAM sampled every 2 s; container log scanned for OOM / mapping-failure /
@@ -434,7 +460,8 @@ other GPU power limits.
   `coding-task/` (prompt, the model's two files, verification, server log),
   with `RESULTS.md` and the raw outputs. The 581K-token conversation used for long generation is not included.
 - `compose.yaml` (defaults: image `.4`, offload 20-33, 1.5 GiB reserve, blended expert order), `.env.example`,
-  `kv.sh` + `kv-2x/4x/6x/8x.yaml` (KV presets), `compose.nvfp4.yaml` (dev overlay mounting the `patch-nvfp4/work/` sources
+  `kv.sh` + `kv-2x/4x/6x/8x.yaml` (KV presets), `adaptive.yaml` + `ds41-launch-adaptive.yaml` (adaptive-verification
+  throughput preset for 5+ users), `compose.nvfp4.yaml` (dev overlay mounting the `patch-nvfp4/work/` sources
   instead of using the `.4` image), `expert-order-blend/` (route counts: 0.6 coding traffic + 0.4 prose).
 - `patch-nvfp4/`: the eight patched Python files (`work/`), the thin `image/Dockerfile` that bakes them into `.4`,
   `make_engram_nvidia_variant.py` (recommended: hard-link NVIDIA's Engram shards next to stock), `make_engram_mxfp4.py`
@@ -462,7 +489,7 @@ other GPU power limits.
 | `ENGRAM_RAM_LAYERS` | `1` | Engram layers held in pinned host RAM (empty = both read from disk). With the 4-bit Engram variants use `1,14` (2 x 16.2 GiB/rank): +5% decode |
 | `ENGRAM_ROW_CACHE_ROWS` | `8388608` | host row cache for disk Engram tables (rows of 256 B); `0` = off |
 | `DRAFT_NVFP4_HEAD` | `1` | DSpark drafter vocabulary head in NVFP4; `0` = BF16 |
-| `DS41_LAUNCH_SETTINGS` | `/etc/ds41/launch.yaml` | lil launcher settings (context, chunk size, drafts, Engram mode) |
+| `DS41_LAUNCH_SETTINGS` | `/etc/ds41/launch.yaml` | lil launcher settings (context, chunk size, drafts, Engram mode); `adaptive.yaml` points it at `ds41-launch-adaptive.yaml` (throughput preset) |
 
 ## compose.yaml
 
