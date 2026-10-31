@@ -28,6 +28,12 @@ This is the recommended configuration on 192-256 GB hosts; 128 GB hosts keep lay
 (hard-linked, no conversion) measured 84.5 steps/s, coding peak 361/386, eval 42/43 — the same as our converted
 tables (84.4, 43/43). The two conversions agree on 100% of block scales and 89% of packed bytes (rounding ties).
 
+**Which Engram tables to use.** Prefer **NVIDIA's** (`make_engram_nvidia_variant.py`: hard-links their two Engram shards
+next to the stock expert shards; download just those two files, ~98 GiB total). Our converter
+(`make_engram_mxfp4.py`) gives equivalent tables but is a quantization step you run yourself — a wrong scale or
+nibble convention produces token salad (we hit exactly that once while writing it). Use it only if you cannot fetch
+NVIDIA's files, and verify the result with `compare_models.py`-style checks before serving.
+
 **Why the Engram-only variant exists.** The user-visible win of NVIDIA's checkpoint is the Engram
 half (host RAM halved: both Engram layers now fit in RAM for what one costs today; 75 GiB less
 disk). The NVFP4 expert half gives nothing on this stack — same weight bytes — and costs ~20%

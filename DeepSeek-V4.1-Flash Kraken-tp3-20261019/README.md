@@ -33,14 +33,17 @@ procedure: **[README-engram-nvfp4.md](README-engram-nvfp4.md)**.
 | `MODEL=` | experts | Engram | decode @32k c1 | coding peak | eval |
 | --- | --- | --- | --- | --- | --- |
 | stock (default) | MXFP4-CSF lossless | FP8, 31.5 GiB/rank/layer | 79.5 steps/s | 336 / 374 | 41/43 |
-| **`local/DeepSeek-V4.1-Flash-1017-engram-mxfp4`** + `ENGRAM_RAM_LAYERS=1,14` | MXFP4-CSF lossless | **MXFP4 (lossy), 16.2 GiB** — built locally from stock in ~10 min | **84.4 steps/s** | 341 / 374 | 43/43 |
-| `local/DeepSeek-V4.1-Flash-1017-engram-nvidia` + `ENGRAM_RAM_LAYERS=1,14` | MXFP4-CSF lossless | NVIDIA's MXFP4 tables (hard-linked) | 84.5 steps/s | 361 / 386 | 42/43 |
+| **`local/DeepSeek-V4.1-Flash-1017-engram-nvidia`** + `ENGRAM_RAM_LAYERS=1,14` — **recommended** | MXFP4-CSF lossless | **NVIDIA's MXFP4 tables, 16.2 GiB** (two shards hard-linked next to stock, no conversion) | **84.5 steps/s** | 361 / 386 | 42/43 |
+| `local/DeepSeek-V4.1-Flash-1017-engram-mxfp4` + `ENGRAM_RAM_LAYERS=1,14` | MXFP4-CSF lossless | our MXFP4 tables, built locally with the converter | 84.4 steps/s | 341 / 374 | 43/43 |
 | `nvidia/DeepSeek-V4.1-Flash-1017-NVFP4` | NVFP4 (lossless re-container) | NVIDIA's MXFP4 | 73.8 steps/s (62.2 without online CSF) | 281 / 288 | 43/43 |
 
-The recommended "less resources" recipe is the first variant: `patch-nvfp4/make_engram_mxfp4.py` requantizes only
-the two Engram tables of the stock weights (identical quantization to NVIDIA's: same block scales on 100% of blocks),
-hard-links the other 46 shards, and with both tables in RAM the result is *faster* than stock because the
-disk-resident Engram layer was costing ~5% of decode. NVIDIA's checkpoint also works (first clean run of it on a
+**Recommended recipe: stock experts + NVIDIA's Engram tables.** Download only the two NVIDIA shards that hold the
+Engram tables (~49 GiB each) and run `patch-nvfp4/make_engram_nvidia_variant.py`: it hard-links them next to the 46
+stock expert shards and writes the config — no quantization step, nothing to get wrong. With both tables in RAM
+(`ENGRAM_RAM_LAYERS=1,14`, ~150 GB host) it is *faster* than stock, because the disk-resident Engram layer was costing
+~5% of decode. Our own converter (`patch-nvfp4/make_engram_mxfp4.py`) produces equivalent tables from the stock FP8
+weights (same block scales on 100% of blocks, same error vs the originals) and is kept as the reference / for anyone
+who cannot fetch NVIDIA's files — but it is a quantization step, so prefer NVIDIA's published tables. NVIDIA's checkpoint also works (first clean run of it on a
 3x96 GB hybrid-offload stack) but tops out ~13% slower: its E4M3 per-16 expert scales compress worse under CSF, and
 its W4A8 mode cannot take CSF. Two bugs worth knowing if you work on this: NVIDIA's `mtp.*` draft experts are still
 MXFP4 and must not be routed to the NVFP4 method (NaN drafts -> garbage only when sampling, 100% acceptance), and
