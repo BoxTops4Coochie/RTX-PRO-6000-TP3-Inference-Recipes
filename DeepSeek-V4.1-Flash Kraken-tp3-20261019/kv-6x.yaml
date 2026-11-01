@@ -1,4 +1,4 @@
-# KV preset "6x": 6.5 GiB -> 6.31M tokens (6.0 x 1M). Most KV, slowest: 71.4 steps/s, coding 276/295. Promotion 16/24 + 16/24.
+# KV preset "6x": 6.5 GiB -> 6,314,130 tokens (6.0 x 1M). Image .7 @32k, 350 W: c1 80.4-81.2 steps/s 207-211 tok/s, c8 693-704 tok/s agg, coding 316-328 / 330-339. Promotion 16/24 + 15/24.
 # Usage: docker compose -f compose.yaml -f kv-6x.yaml up -d --force-recreate
 # (Overrides KV_CACHE_MEMORY_BYTES from .env; the VRAM comes out of expert promotion.)
 services:

@@ -1,6 +1,7 @@
 from functools import cache
 from typing import TYPE_CHECKING
 
+import os
 import torch
 from pydantic import BaseModel, ConfigDict
 from vllm.distributed import get_tensor_model_parallel_world_size, tensor_model_parallel_all_gather
@@ -29,7 +30,9 @@ class Shard(BaseModel):
     token_logit: torch.Tensor
     lse: torch.Tensor
     start: int
-    local: int
+    local: int           # valid vocabulary entries on this rank (TP3: 43136, 43136, 43008)
+    local_padded: int    # buffer width on every rank (TP3: 43136); gathers need equal widths
+    vocab_size: int
     blocks: int
     counts: torch.Tensor
     partials: torch.Tensor
@@ -59,11 +62,14 @@ def shard_drafts(spec: "DSparkSpeculator", model: torch.nn.Module) -> Shard | No
         and isinstance(markov.markov_w1, torch.nn.Embedding)
         and getattr(w2, "shard_indices", None) == si
         and w2.weight.dtype == markov.markov_w1.weight.dtype
-        and w2.weight.shape == (si.num_org_elements, markov.markov_w1.weight.shape[1])
+        and w2.weight.shape == (si.num_org_elements_padded, markov.markov_w1.weight.shape[1])
         and w2.weight.is_contiguous()
-        and si.num_org_vocab_padding == 0
         and si.num_added_elements == 0
-        and si.num_org_elements * ranks == spec.vocab_size
+        # TP3 port: the vocab is padded to a multiple of the rank count (129,280 -> 129,408); every rank's buffers
+        # are num_org_elements_padded wide and only the LAST rank holds padding, which the kernels mask via `local`.
+        and si.org_vocab_end_index <= spec.vocab_size
+        and (ranks - 1) * si.num_org_elements_padded < spec.vocab_size <= ranks * si.num_org_elements_padded
+        and si.org_vocab_start_index % si.num_org_elements_padded == 0
         and model.draft_id_to_target_id is None
         and spec.draft_watermarker is None
         and spec.acceptance_estimator is None
@@ -73,22 +79,44 @@ def shard_drafts(spec: "DSparkSpeculator", model: torch.nn.Module) -> Shard | No
         and processor.soft_cap is None
         and processor.scale == 1.0
     )
+    if os.environ.get('BRRR_TP3_LOG') == '1':
+        conds = {
+            'draft_logits': spec.draft_logits is not None, 'world==ranks': get_tensor_model_parallel_world_size() == ranks,
+            'si': si is not None, 'markov.shard_across_tp': bool(getattr(markov, 'shard_across_tp', False)),
+            'w1_is_Embedding': isinstance(markov.markov_w1, torch.nn.Embedding),
+            'w2_si_eq': getattr(w2, 'shard_indices', None) == si,
+            'w2_dtype_eq': w2.weight.dtype == markov.markov_w1.weight.dtype,
+            'w2_shape': (tuple(w2.weight.shape), si and (si.num_org_elements_padded, markov.markov_w1.weight.shape[1])),
+            'w2_contig': w2.weight.is_contiguous(), 'added==0': si and si.num_added_elements == 0,
+            'end<=vocab': si and si.org_vocab_end_index <= spec.vocab_size,
+            'padded_geom': si and ((ranks - 1) * si.num_org_elements_padded < spec.vocab_size <= ranks * si.num_org_elements_padded),
+            'start_aligned': si and si.org_vocab_start_index % si.num_org_elements_padded == 0,
+            'no_draft_id_map': model.draft_id_to_target_id is None, 'no_watermark': spec.draft_watermarker is None,
+            'no_acc_estimator': spec.acceptance_estimator is None, 'not_use_acc_estimator': not spec.use_acceptance_estimator,
+            'no_draft_topk': spec._draft_topk is None, 'no_fp64_gumbel': not spec.use_fp64_gumbel,
+            'no_softcap': processor.soft_cap is None, 'scale1': processor.scale == 1.0,
+        }
+        print('[brrr-tp3] vp_sampling conditions: ok=%s %s' % (ok, conds), flush=True)
     if not ok:
         return None
-    local = si.num_org_elements
-    blocks = triton.next_power_of_2(triton.cdiv(local, DRAFT_BLOCK))
+    local, local_padded = si.num_org_elements, si.num_org_elements_padded
+    blocks = triton.next_power_of_2(triton.cdiv(local_padded, DRAFT_BLOCK))
+    if os.environ.get('BRRR_TP3_LOG') == '1':
+        print(f'[brrr-tp3] vp_sampling shard: start={si.org_vocab_start_index} local={local} padded={local_padded} blocks={blocks} ranks={ranks} vocab={spec.vocab_size}', flush=True)
     rows = spec.max_num_reqs * spec.num_query_per_req
     device = spec.draft_logits.device
     slots = (spec.max_num_reqs + 1, spec.num_speculative_steps)
     weight = w2.weight.float()
     w2_scale = weight.abs().amax(dim=1).clamp_min(1e-12) / torch.finfo(torch.float8_e4m3fn).max
-    spec.draft_logits = torch.zeros((spec.max_num_reqs, spec.num_speculative_steps, local), dtype=spec.draft_logits.dtype, device=device)
+    spec.draft_logits = torch.zeros((spec.max_num_reqs, spec.num_speculative_steps, local_padded), dtype=spec.draft_logits.dtype, device=device)
     shard = Shard(
         logits=spec.draft_logits,
         token_logit=torch.zeros(slots, dtype=torch.float32, device=device),
         lse=torch.zeros(slots, dtype=torch.float32, device=device),
         start=si.org_vocab_start_index,
         local=local,
+        local_padded=local_padded,
+        vocab_size=spec.vocab_size,
         blocks=blocks,
         counts=torch.zeros(rows, dtype=torch.int32, device=device),
         partials=torch.empty((rows, blocks, DRAFT_WORDS), dtype=torch.float32, device=device),
@@ -101,7 +129,12 @@ def shard_drafts(spec: "DSparkSpeculator", model: torch.nn.Module) -> Shard | No
 
 
 def full_draft_logits(draft_logits: torch.Tensor | None) -> torch.Tensor | None:
-    return draft_logits if draft_logits is None or draft_logits.data_ptr() not in SHARDS else tensor_model_parallel_all_gather(draft_logits, dim=-1)
+    if draft_logits is None or draft_logits.data_ptr() not in SHARDS:
+        return draft_logits
+    shard = SHARDS[draft_logits.data_ptr()]
+    full = tensor_model_parallel_all_gather(draft_logits, dim=-1)
+    # TP3 port: the gathered width includes the last rank's padding; the stock sampler wants exactly vocab_size.
+    return full[..., : shard.vocab_size].contiguous() if full.shape[-1] != shard.vocab_size else full
 
 
 @triton.jit
@@ -220,18 +253,20 @@ def _draft_combine_kernel(
     vp_stride,
     sink,
     TP: tl.constexpr,
+    TPP: tl.constexpr,
     RANK: tl.constexpr,
 ):
     row = tl.program_id(0).to(tl.int64)
-    ranks = tl.arange(0, TP)
+    ranks = tl.arange(0, TPP)  # TP3 port: power-of-two lane count, lanes >= TP are padding
+    rmask = ranks < TP
     q = gathered_ptr + (ranks * rows + row) * DRAFT_WORDS
-    win = tl.argmax(tl.load(q), axis=0)
-    token = _pick(tl.load(q + 1), ranks, win).to(tl.int64)
+    win = tl.argmax(tl.load(q, mask=rmask, other=float("-inf")), axis=0)
+    token = _pick(tl.load(q + 1, mask=rmask, other=0.0), ranks, win).to(tl.int64)
     req = tl.load(idx_ptr + row * idx_stride).to(tl.int64)
     slot = tl.where(req >= 0, req, sink)
     tl.store(tokens_ptr + row * tokens_stride + col, token)
-    tl.store(token_logit_ptr + slot * vp_stride + col, _pick(tl.load(q + 2), ranks, win))
-    tl.store(lse_ptr + slot * vp_stride + col, _logsumexp(tl.load(q + 3), tl.load(q + 4)))
+    tl.store(token_logit_ptr + slot * vp_stride + col, _pick(tl.load(q + 2, mask=rmask, other=0.0), ranks, win))
+    tl.store(lse_ptr + slot * vp_stride + col, _logsumexp(tl.load(q + 3, mask=rmask, other=float("-inf")), tl.load(q + 4, mask=rmask, other=0.0)))
     r = tl.arange(0, RANK)
     tl.store(emb_ptr + row * RANK + r, tl.load(w1_ptr + token * RANK + r))
 
@@ -297,6 +332,7 @@ def draft(spec: "DSparkSpeculator", num_reqs: int, head_hidden: torch.Tensor) ->
             shard.lse.stride(0),
             spec.max_num_reqs,
             TP=shard.ranks,
+            TPP=triton.next_power_of_2(shard.ranks),
             RANK=rank,
             num_warps=1,
         )
@@ -306,14 +342,16 @@ def draft(spec: "DSparkSpeculator", num_reqs: int, head_hidden: torch.Tensor) ->
 
 
 @triton.jit
-def _ratio_terms(g1_ptr, num_logits, vp_logit_ptr, vp_lse_ptr, vp_stride, req, start, count, temp, TP: tl.constexpr, S: tl.constexpr):
+def _ratio_terms(g1_ptr, num_logits, vp_logit_ptr, vp_lse_ptr, vp_stride, req, start, count, temp, TP: tl.constexpr, TPP: tl.constexpr, S: tl.constexpr):
     lanes = tl.arange(0, S)
     live = lanes < count
-    q = g1_ptr + (tl.arange(0, TP)[:, None] * num_logits + start + lanes[None, :]) * STAT_WORDS
-    m = tl.load(q, mask=live[None, :], other=float("-inf"))
-    s = tl.load(q + 1, mask=live[None, :], other=0.0)
+    rk = tl.arange(0, TPP)[:, None]  # TP3 port: padded rank lanes
+    rm = (rk < TP) & live[None, :]
+    q = g1_ptr + (rk * num_logits + start + lanes[None, :]) * STAT_WORDS
+    m = tl.load(q, mask=rm, other=float("-inf"))
+    s = tl.load(q + 1, mask=rm, other=0.0)
     lse = _logsumexp(m, s)
-    owned = tl.max(tl.load(q + 2, mask=live[None, :], other=float("-inf")), axis=0)
+    owned = tl.max(tl.load(q + 2, mask=rm, other=float("-inf")), axis=0)
     d_lp = tl.load(vp_logit_ptr + req * vp_stride + lanes, mask=live, other=0.0) / temp - tl.load(vp_lse_ptr + req * vp_stride + lanes, mask=live, other=0.0)
     return owned - lse - d_lp, m, s
 
@@ -394,6 +432,7 @@ def _target_residual_kernel(
     BLOCK: tl.constexpr,
     NB: tl.constexpr,
     TP: tl.constexpr,
+    TPP: tl.constexpr,
     S: tl.constexpr,
 ):
     row = tl.program_id(0).to(tl.int64)
@@ -408,15 +447,16 @@ def _target_residual_kernel(
     is_bonus = (row + 1 >= num_logits) | (tl.load(local_pos_ptr + row + 1, mask=row + 1 < num_logits, other=0) == 0)
     rejected = tl.load(draft_sampled_ptr + row + 1, mask=row + 1 < num_logits, other=-1)
     lanes = tl.arange(0, S)
-    terms, _, _ = _ratio_terms(g1_ptr, num_logits, vp_logit_ptr, vp_lse_ptr, vp_stride, req, start, step, temp, TP, S)
+    terms, _, _ = _ratio_terms(g1_ptr, num_logits, vp_logit_ptr, vp_lse_ptr, vp_stride, req, start, step, temp, TP, TPP, S)
     drafted = tl.load(draft_sampled_ptr + start + lanes + 1, mask=lanes < step, other=-1)
     log_p = 0.0
     for s in tl.static_range(S):
         take = (temp != 0.0) & (s < step) & (_pick(drafted, lanes, s) >= 0)
         log_p = tl.where(take, tl.minimum(log_p + _pick(terms, lanes, s), 0.0), log_p)
     x = tl.load(logits_ptr + row * logits_stride + offs, mask=mask, other=float("-inf")).to(tl.float32) / tl.where(temp > 0.0, temp, 1.0)
-    stats = g1_ptr + (tl.arange(0, TP) * num_logits + row) * STAT_WORDS
-    lse = _logsumexp(tl.load(stats), tl.load(stats + 1))
+    rk1 = tl.arange(0, TPP)
+    stats = g1_ptr + (rk1 * num_logits + row) * STAT_WORDS
+    lse = _logsumexp(tl.load(stats, mask=rk1 < TP, other=float("-inf")), tl.load(stats + 1, mask=rk1 < TP, other=0.0))
     use_draft = (temp != 0.0) & (is_bonus == 0) & (rejected >= 0)
     t_lp = x - lse
     d_lp = (
@@ -470,6 +510,7 @@ def _target_reject_kernel(
     temp_ptr,
     seeds_ptr,
     TP: tl.constexpr,
+    TPP: tl.constexpr,
     S: tl.constexpr,
 ):
     r = tl.program_id(0)
@@ -481,14 +522,14 @@ def _target_reject_kernel(
     temp = tl.load(temp_ptr + req).to(tl.float32)
     greedy = temp == 0.0
     lanes = tl.arange(0, S)
-    ranks = tl.arange(0, TP)
+    ranks = tl.arange(0, TPP)  # TP3 port: padded rank lanes
     live = lanes < num_draft
     drafted = tl.load(draft_sampled_ptr + start + lanes + 1, mask=live, other=-1).to(tl.int64)
     following = tl.load(draft_sampled_ptr + start + lanes + 2, mask=lanes < num_draft - 1, other=-1)
     u = tl_rand32(seed, tl.load(pos_ptr + start + lanes, mask=live, other=0), includes_zero=False)
-    terms, m, s = _ratio_terms(g1_ptr, num_logits, vp_logit_ptr, vp_lse_ptr, vp_stride, req, start, num_draft, temp, TP, S)
+    terms, m, s = _ratio_terms(g1_ptr, num_logits, vp_logit_ptr, vp_lse_ptr, vp_stride, req, start, num_draft, temp, TP, TPP, S)
     best = _pick(s, ranks[:, None], tl.argmax(m, axis=0)[None, :]).to(tl.int64)
-    mass = tl.sum(tl.load(g2_ptr + (ranks[:, None] * num_logits + start + lanes[None, :] + 1) * STAT_WORDS, mask=(lanes < num_draft - 1)[None, :], other=0.0), axis=0)
+    mass = tl.sum(tl.load(g2_ptr + (ranks[:, None] * num_logits + start + lanes[None, :] + 1) * STAT_WORDS, mask=(ranks < TP)[:, None] & (lanes < num_draft - 1)[None, :], other=0.0), axis=0)
     accepted = tl.zeros((), tl.int64)
     verifying = num_draft >= 0
     log_p = tl.zeros((), tl.float32)
@@ -522,9 +563,9 @@ def _target_reject_kernel(
     row = start + accepted
     if (temp != 0.0) | (row == end - 1):
         q = g2_ptr + (ranks * num_logits + row) * STAT_WORDS
-        vals = tl.load(q + 1)
+        vals = tl.load(q + 1, mask=ranks < TP, other=float("-inf"))  # TP3 port: padded lane must not read past the gathered buffer
         vals = tl.where(vals != vals, float("-inf"), vals)
-        token = _pick(tl.load(q + 2), ranks, tl.argmax(vals, axis=0)).to(tl.int64)
+        token = _pick(tl.load(q + 2, mask=ranks < TP, other=0.0), ranks, tl.argmax(vals, axis=0)).to(tl.int64)
         tl.store(sampled_ptr + r * sampled_stride + accepted, token)
 
 
@@ -596,9 +637,10 @@ def verify(logits: torch.Tensor, input_batch: "InputBatch", spec: "DSparkSpecula
     n = temperature.shape[0]
     temp, seed = torch.empty(n, dtype=temperature.dtype, device=temperature.device), torch.empty(n, dtype=seeds.dtype, device=seeds.device)
     _stage_kernel[(1,)](temp, seed, temperature, seeds, n, N=triton.next_power_of_2(n), num_warps=1)
-    num_logits, local = logits.shape
+    num_logits, local_padded = logits.shape
+    local = shard.local  # TP3 port: valid entries on this rank (padded tail masked in the kernels)
     num_reqs = input_batch.num_reqs
-    blocks = triton.next_power_of_2(triton.cdiv(local, BLOCK))
+    blocks = triton.next_power_of_2(triton.cdiv(local_padded, BLOCK))
     draft_sampled = input_batch.input_ids[input_batch.logits_indices]
     pos = input_batch.positions[input_batch.logits_indices]
     lanes = triton.next_power_of_2(num_spec + 1)
@@ -648,6 +690,7 @@ def verify(logits: torch.Tensor, input_batch: "InputBatch", spec: "DSparkSpecula
         BLOCK=BLOCK,
         NB=blocks,
         TP=shard.ranks,
+        TPP=triton.next_power_of_2(shard.ranks),
         S=lanes,
         num_warps=8,
     )
@@ -671,6 +714,7 @@ def verify(logits: torch.Tensor, input_batch: "InputBatch", spec: "DSparkSpecula
         temp,
         seed,
         TP=shard.ranks,
+        TPP=triton.next_power_of_2(shard.ranks),
         S=lanes,
         num_warps=1,
     )

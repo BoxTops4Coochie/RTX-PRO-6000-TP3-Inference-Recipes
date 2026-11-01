@@ -1,0 +1,14 @@
+{
+ "preset": "brrr-stage2b-c8",
+ "capacity": 2185581,
+ "verdict": "PASS",
+ "waves": 2,
+ "long_ok": 16,
+ "long_total": 16,
+ "ping_ok": 262,
+ "ping_total": 262,
+ "prompt_tokens": 9561747,
+ "min_free_mib": 494,
+ "bad_log_lines": [],
+ "wall_min": 39.30475692749023
+}

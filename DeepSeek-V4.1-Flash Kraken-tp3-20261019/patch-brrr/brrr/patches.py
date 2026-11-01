@@ -249,6 +249,10 @@ PATCHES: dict[str, Patch] = {
     # RANKS=3 validation), fused decoder (model.py wiring + CSF scales).
     # STAGE 2a: phased PCIe all-reduce / all-gather for the 16 KB..1 MB sizes b12x one-shot declines (RANKS=3 build)
     "vllm.distributed.device_communicators.cuda_communicator": patch_communicator,
+    # STAGE 2b: vocab-split draft sampling + verification (padding-aware for TP3)
+    "vllm.v1.worker.gpu.spec_decode.dspark.speculator": patch_dspark,
+    "vllm.v1.worker.gpu.spec_decode.rejection_sampler": patch_rejection,
+    "vllm.v1.worker.gpu.model_runner": patch_runner,
     "vllm.model_executor.layers.fused_moe.b12x": patch_b12x,
     "vllm.models.deepseek_v4_1.b12x_layers": patch_linear,
     "b12x.attention.dsa_indexer.mxfp4": patch_indexer,

@@ -1,0 +1,31 @@
+21:DS41_IMAGE=azallaza/ds41-kraken-tp3:20261019.7
+=== preset 2x on .7 07:32
+pre-boot: avail=98G shm_lmcache=0
+  health=200 after ~210s image=azallaza/ds41-kraken-tp3:20261019.7 kv=GPU KV cache size: 2,185,581 tokens promo=chunks_hot=['19/24', '19/24'] vp=3
+2x c1 32k: 84.8 steps/s  accept 2.73  per-user 230 tok/s  aggregate 230  | coding mean 350 / max 365
+2x c4 32k: 181.9 steps/s  accept 2.60  per-user 120 tok/s  aggregate 481
+2x c8 32k: 349.5 steps/s  accept 2.23  per-user 96 tok/s  aggregate 766
+=== preset 4x on .7 07:39
+pre-boot: avail=98G shm_lmcache=0
+  health=200 after ~210s image=azallaza/ds41-kraken-tp3:20261019.7 kv=GPU KV cache size: 4,614,187 tokens promo=chunks_hot=['17/24', '17/24'] vp=3
+4x c1 32k: 82.0 steps/s  accept 2.68  per-user 221 tok/s  aggregate 221  | coding mean 326 / max 341
+4x c4 32k: 169.0 steps/s  accept 2.55  per-user 109 tok/s  aggregate 435
+4x c8 32k: 326.9 steps/s  accept 2.19  per-user 89 tok/s  aggregate 709
+=== preset 6x on .7 07:47
+pre-boot: avail=90G shm_lmcache=0
+  health=200 after ~210s image=azallaza/ds41-kraken-tp3:20261019.7 kv=GPU KV cache size: 6,314,130 tokens promo=chunks_hot=['16/24', '15/24'] vp=3
+6x c1 32k: 77.7 steps/s  accept 2.58  per-user 202 tok/s  aggregate 202  | coding mean 314 / max 328
+6x c4 32k: 164.0 steps/s  accept 2.36  per-user 99 tok/s  aggregate 398
+6x c8 32k: 301.2 steps/s  accept 2.24  per-user 84 tok/s  aggregate 671
+=== preset 8x on .7 07:54
+pre-boot: avail=85G shm_lmcache=0
+  health=200 after ~210s image=azallaza/ds41-kraken-tp3:20261019.7 kv=GPU KV cache size: 8,499,917 tokens promo=chunks_hot=['14/24', '13/24'] vp=3
+8x c1 32k: 73.3 steps/s  accept 2.50  per-user 185 tok/s  aggregate 185  | coding mean 268 / max 274
+8x c4 32k: 140.6 steps/s  accept 2.38  per-user 85 tok/s  aggregate 341
+8x c8 32k: 272.6 steps/s  accept 2.28  per-user 77 tok/s  aggregate 619
+=== back to default 2x 08:02
+pre-boot: avail=78G shm_lmcache=0
+  health=200 after ~210s image=azallaza/ds41-kraken-tp3:20261019.7 kv=GPU KV cache size: 2,185,581 tokens promo=chunks_hot=['19/24', '19/24'] vp=3
+done 08:05
+
+[exited with code 0]
