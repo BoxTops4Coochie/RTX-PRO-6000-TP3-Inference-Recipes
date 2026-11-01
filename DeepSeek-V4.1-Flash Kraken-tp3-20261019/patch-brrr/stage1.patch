@@ -1,0 +1,288 @@
+--- a/models/deepseek_v4_1/attention.py
++++ b/models/deepseek_v4_1/attention.py
+@@ -12,6 +12,7 @@
+ from b12x.attention import dsa_indexer
+ from b12x.attention.compressed_sparse_mla import rotary, weight_scale
+ from b12x.gemm import wo_projection
++from brrr import skinny, sparse_decode
+ from torch import nn
+ 
+ from vllm import envs
+@@ -383,6 +384,43 @@
+     return torch.empty_like(hidden, memory_format=torch.contiguous_format)
+ 
+ 
++@torch.library.custom_op("vllm::dsv41_b12x_attend", mutates_args=())
++def _attend_op(
++    hidden: torch.Tensor,
++    positions: torch.Tensor,
++    prefix: str,
++    heads: int,
++    head_dim: int,
++) -> torch.Tensor:
++    context = get_forward_context()
++    layer = context.no_compile_layers[prefix]
++    return layer._attend(positions, hidden, prefetch_wo=False)[0]
++
++
++@_attend_op.register_fake
++def _attend_op_fake(hidden, positions, prefix, heads, head_dim):
++    return hidden.new_empty((hidden.shape[0], heads, head_dim))
++
++
++@torch.library.custom_op("vllm::dsv41_b12x_attend_prepared", mutates_args=())
++def _attend_prepared_op(
++    hidden: torch.Tensor,
++    positions: torch.Tensor,
++    q: torch.Tensor,
++    kv: torch.Tensor,
++    qr: torch.Tensor,
++    prefix: str,
++) -> torch.Tensor:
++    context = get_forward_context()
++    layer = context.no_compile_layers[prefix]
++    return layer._attend_core(positions, hidden, q, kv, qr)[0]
++
++
++@_attend_prepared_op.register_fake
++def _attend_prepared_op_fake(hidden, positions, q, kv, qr, prefix):
++    return torch.empty_like(q)
++
++
+ @torch.library.custom_op("vllm::dsv41_b12x_prepare_global_kv", mutates_args=())
+ def _prepare_global_kv(
+     hidden: torch.Tensor,
+@@ -605,6 +643,13 @@
+         register_b12x_unit_provider(self._helpers)
+         set_b12x_preparation_provider(self, self)
+         self._ready = False
++        for linear in (
++            self.fused_wqa_wkv,
++            self.wq_b,
++            getattr(self.indexer, "wq_b", None),
++        ):
++            if linear is not None:
++                linear.skinny_target = True
+ 
+     def get_attn_backend(self):
+         return self.backend_cls
+@@ -1057,7 +1102,6 @@
+             from b12x.attention.dsa_indexer.mxfp4 import score_mxfp4, select_mxfp4
+             from b12x.preparation import PreparedCall
+ 
+-            assert self.indexer is not None
+             cache = self.indexer.k_cache.kv_cache
+             device, heads = cache.device, self.indexer.heads
+             width = state.caps.max_page_table_width
+@@ -1178,7 +1222,6 @@
+             raise ValueError(
+                 f"V4.1 {mode} indexer rows {rows} exceed chunk capacity {chunk}"
+             )
+-        assert self.indexer is not None
+         return dsa_indexer.plan(
+             dsa_indexer.Caps(
+                 device=self.rotary_emb.cos_sin_cache.device,
+@@ -1320,23 +1363,39 @@
+             return torch.empty_like(hidden_states)
+         return _attention(hidden_states, positions, self.prefix, global_kv_ready)
+ 
++    def attend(self, positions, hidden_states):
++        return _attend_op(
++            hidden_states, positions, self.prefix, self.n_local_heads, self.head_dim
++        )
++
++    def attend_prepared(self, positions, hidden_states, q, kv, qr):
++        return _attend_prepared_op(hidden_states, positions, q, kv, qr, self.prefix)
++
+     def _forward(self, positions, hidden_states):
++        output, is_prefill = self._attend(positions, hidden_states)
++        return self._o_proj(output, positions, is_prefill=is_prefill)
++
++    def _attend(self, positions, hidden_states, *, prefetch_wo=True):
+         if not self._ready:
+             raise PreparationResourceUnavailableError(
+                 "V4.1 attention metadata is not prepared"
+             )
+         rows = hidden_states.shape[0]
+         qr_kv, _ = self.fused_wqa_wkv(hidden_states)
+-        qr, kv = qr_kv.split((self.q_lora_rank, 512), dim=-1)
+-        qr, kv = self.q_norm(qr), self.kv_norm(kv)
++        qr, kv = skinny.split_norm(qr_kv, self.q_norm, self.kv_norm)
+         q = self.wq_b(qr).view(rows, self.n_local_heads, 512)
+-        l2_prefetch.issue(self._l2pf_wo, rows)
++        if prefetch_wo:
++            l2_prefetch.issue(self._l2pf_wo, rows)
+         q = _rotated(
+             q,
+             positions,
+             self.rotary_emb.cos_sin_cache,
+             plan=self._helper_plan("q"),
+         )
++        return self._attend_core(positions, hidden_states, q, kv, qr)
++
++    def _attend_core(self, positions, hidden_states, q, kv, qr):
++        rows = hidden_states.shape[0]
+         output = torch.empty_like(q)
+         metadata = cast(
+             dict[str, DeepseekV41B12xMetadata] | None,
+@@ -1350,7 +1409,8 @@
+             original_swa = metadata[self.swa_cache_layer.prefix]
+             swa = self._query_metadata(original_swa)
+             is_prefill = not swa.is_decode
+-            self._cache_context_kv(kv, positions)
++            if not getattr(kv, "cached", False):
++                self._cache_context_kv(kv, positions)
+             if swa is original_swa:
+                 self._prepare_global_kv(positions, hidden_states)
+             index_query = None
+@@ -1384,7 +1444,7 @@
+                 )
+                 index_query = (iq_data, iq_scale, iw)
+             self.forward_mqa(q, kv, positions, output, index_query=index_query)
+-        return self._o_proj(output, positions, is_prefill=is_prefill)
++        return output, is_prefill
+ 
+     @eager_break_during_capture
+     def forward_mqa(self, q, kv, positions, output, *, index_query=None):
+@@ -1494,6 +1554,22 @@
+                 dsa_indexer.score(binding)
+                 dsa_indexer.select(binding)
+ 
++        if mode == "decode" and sparse_decode.fits(q, self.swa_width, 512 if main is not None else 0):
++            sparse_decode.decode(
++                q,
++                output,
++                self.swa_cache_layer.kv_cache,
++                self.swa_cache_layer.block_size,
++                swa,
++                self.window_size,
++                self.swa_width,
++                self.is_draft,
++                swa.swa_replay_start if self.is_ced_decoder else None,
++                (self._owner().kv_cache, self._main_page, owner.topk_indices_buffer[:rows], main) if main is not None else None,
++                self.attn_sink,
++                512**-0.5,
++            )
++            return
+         # Reuse the shared arena only after indexing completes. Keep full-batch
+         # metadata beside, not overlapping, the native attention scratch.
+         metadata_specs = self._attention_workspace_specs[mode]
+@@ -1752,7 +1828,6 @@
+             )
+         require_prepared(plan, "gemm.wo_projection", o.device)
+         weights = self._wo_projection_weights
+-        assert weights is not None
+         scratch = _scratch(plan)
+         binding = wo_projection.bind_inv_rope(
+             plan,
+--- a/renderers/deepseek_v4.py
++++ b/renderers/deepseek_v4.py
+@@ -1,5 +1,6 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++from typing import Any
+ 
+ from vllm.config import VllmConfig
+ from vllm.entrypoints.chat_utils import (
+@@ -9,12 +10,58 @@
+     parse_chat_messages_async,
+ )
+ from vllm.tokenizers.deepseek_v4 import DeepseekV4Tokenizer
++from vllm.tokenizers.deepseek_v41_encoding import (
++    merge_tool_messages,
++    sort_tool_results_by_call_order,
++)
+ from vllm.utils.async_utils import make_async
+ 
+ from .base import BaseRenderer
+ from .inputs import DictPrompt
+ from .inputs.preprocess import parse_dec_only_prompt
+ from .params import ChatParams
++
++
++def _tool_call_id(call: Any) -> str:
++    if not isinstance(call, dict):
++        return ""
++    function = call.get("function")
++    function_id = function.get("id", "") if isinstance(function, dict) else ""
++    return call.get("id") or function_id or ""
++
++
++def _order_messages_like_v41_prompt(
++    messages: list[ChatCompletionMessageParam],
++) -> list[ChatCompletionMessageParam]:
++    if not all(isinstance(message, dict) for message in messages):
++        return messages
++    markers: list[dict[str, Any]] = []
++    for index, message in enumerate(messages):
++        role = message.get("role")
++        marker: dict[str, Any] = {"role": role, "content": index}
++        if role == "tool":
++            marker["tool_call_id"] = message.get("tool_call_id", "")
++        tool_calls = message.get("tool_calls")
++        if role == "assistant" and isinstance(tool_calls, list):
++            marker["tool_calls"] = [{"id": _tool_call_id(call)} for call in tool_calls]
++        if message.get("task") is not None:
++            marker["task"] = message["task"]
++        markers.append(marker)
++
++    order: list[int] = []
++    for merged in sort_tool_results_by_call_order(merge_tool_messages(markers)):
++        blocks = merged.get("content_blocks")
++        if blocks is None:
++            order.append(merged["content"])
++            continue
++        for block in blocks:
++            order.append(
++                block["content"] if block["type"] == "tool_result" else block["text"]
++            )
++
++    if sorted(order) != list(range(len(messages))):
++        return messages
++    return [messages[index] for index in order]
+ 
+ 
+ class DeepseekV4Renderer(BaseRenderer[DeepseekV4Tokenizer]):
+@@ -32,11 +79,19 @@
+     def _apply_chat_template(self, *args, **kwargs):
+         return self.get_tokenizer().apply_chat_template(*args, **kwargs)
+ 
++    def _order_for_prompt(
++        self, messages: list[ChatCompletionMessageParam]
++    ) -> list[ChatCompletionMessageParam]:
++        if self.model_config.tokenizer_mode == "deepseek_v41":
++            return _order_messages_like_v41_prompt(messages)
++        return messages
++
+     def render_messages(
+         self,
+         messages: list[ChatCompletionMessageParam],
+         params: ChatParams,
+     ) -> tuple[list[ConversationMessage], DictPrompt]:
++        messages = self._order_for_prompt(messages)
+         conversation, mm_data, mm_uuids = parse_chat_messages(
+             messages,
+             self.model_config,
+@@ -64,6 +119,7 @@
+         messages: list[ChatCompletionMessageParam],
+         params: ChatParams,
+     ) -> tuple[list[ConversationMessage], DictPrompt]:
++        messages = self._order_for_prompt(messages)
+         conversation, mm_data, mm_uuids = await parse_chat_messages_async(
+             messages,
+             self.model_config,
+--- a/tokenizers/deepseek_v41_encoding.py
++++ b/tokenizers/deepseek_v41_encoding.py
+@@ -305,6 +305,12 @@
+     for idx in range(len(messages) - 1, -1, -1):
+         role = messages[idx].get("role")
+         if role == "user" or (role == "system" and idx > 0):
++            content_blocks = messages[idx].get("content_blocks")
++            if content_blocks and not any(
++                block.get("type") in ("text", "image", "image_url")
++                for block in content_blocks
++            ):
++                continue
+             last_user_index = idx
+             break
+     return last_user_index

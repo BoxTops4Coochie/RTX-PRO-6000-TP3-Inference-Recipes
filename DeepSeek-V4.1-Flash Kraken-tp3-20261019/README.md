@@ -1,4 +1,4 @@
-# DeepSeek-V4.1-Flash-1017 Kraken TP3 — 20261019.5
+# DeepSeek-V4.1-Flash-1017 Kraken TP3 — 20261019.6
 
 DeepSeek-V4.1-Flash-1017 served at **tensor parallel 3 with the full 1M-token context** on three 96 GB RTX PRO 6000
 Blackwell cards, from DeepSeek's **original weights** (FP8 dense layers, MXFP4 routed experts; nothing requantized).
@@ -7,7 +7,9 @@ Weights: [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-
 `1bae0e1088993b9b82de08f59de5be5a34e42170` (MIT). Runtime: Local Inference Lab's vLLM "karmic-kraken" image
 (`karmic-kraken-beta-20261016.2`) with FlashInfer `main` b12x and the TP3 changes in `src/`.
 
-Image: **`azallaza/ds41-kraken-tp3:20261019.5`** (`sha256:69e22541612734ca1e72c2a0a1d1a61e8fa5c167997e11ba6ef29cfa27cb5dfc`) = `20261019.4`
+Image: **`azallaza/ds41-kraken-tp3:20261019.6`** (`sha256:f78bcf3b6bd64f707ef699ae8b16b99228499e59f4b57a114fd61d9f0739fa75`) = `20261019.5` + the BRRR TP3 kernels (`patch-brrr/`, see
+[Update 2026-11-01](#update-2026-11-01-brrr-decode-kernels-ported-to-tp3-4-steps-8-coding)); `20261019.5`
+(`sha256:69e22541612734ca1e72c2a0a1d1a61e8fa5c167997e11ba6ef29cfa27cb5dfc`) = `20261019.4`
 (`sha256:f199d858632f7332b5bc7257cb873b844b910620dc8078f817faa43b82bee2ae`) + the cap-only adaptive-verification patch
 (`patch-rowcap/`, one file; see [Update 2026-10-31 (b)](#update-2026-10-31-b-cap-only-adaptive-verification-c6-24-c8-23-c1c4-unchanged)); `20261019.4` =
 `20261019.3` (`sha256:c4c2de529da6d3762951e7f5c5b696866f20d740a5f16d9cdda0f13786352646`) + the MXFP4-Engram / NVFP4 patches
@@ -18,7 +20,7 @@ Same code as `20261019` (`sha256:54836f9d…`, 13.0 GB download, 45.1 GB unpacke
 previous tag, so pulling it over an earlier one downloads ~120 KB.
 
 ```bash
-docker pull azallaza/ds41-kraken-tp3:20261019.5
+docker pull azallaza/ds41-kraken-tp3:20261019.6
 HF_CACHE_DIR=/path/to/huggingface docker compose up -d     # port 15015, model name DeepSeek-V4.1-Flash
 ```
 
@@ -26,6 +28,46 @@ The container arms expert promotion by itself once `/health` answers (log line
 `ds41-serve: expert promotion armed and warmed`); serve traffic after that line for full speed.
 
 Host settings: 350 W/GPU, +6000 memory offset, ~256 GB host RAM, the checkpoint on an NVMe drive (Engram layer 14 is read from it while serving).
+
+## Update 2026-11-01: BRRR decode kernels ported to TP3 (+4% steps, +8% coding)
+
+New image tag **`azallaza/ds41-kraken-tp3:20261019.6`** = `20261019.5` plus three decode kernels and one renderer fix
+taken from [fraserprice/DeepSeek-4.1-Flash-1017-BRRR](https://huggingface.co/fraserprice/DeepSeek-4.1-Flash-1017-BRRR)
+(Apache-2.0; `patch-brrr/LICENSE-brrr` + `NOTICE-brrr` are kept in the image and here). BRRR is a TP4 recipe on the
+same Local Inference Lab vLLM base as this image, applied through an import hook; the pieces that are rank-agnostic
+or rebuildable for 3 ranks are what moved:
+
+- **skinny FP8 GEMM** for the attention projections when <= 8 decode rows are in flight (`skinny.cu`);
+- **radix top-k** replacing the indexer's selection kernel (`candidates.cu`);
+- **phased PCIe all-reduce / all-gather**, rebuilt with `RANKS = 3`, for the 16 KB..1 MB messages that b12x's
+  one-shot (256 KB limit) declined and that used to fall back to NCCL ring (~255 us each). On TP3 it takes the
+  lm_head logits all-gather (1-6 rows x 43,136 fp32 = 172 KB..1 MB, every step) and the 40-56-row bf16 all-reduces
+  of crowded c8 steps;
+- **renderer fix**: a message holding only tool results no longer starts a new turn (so reasoning inside an agent's
+  tool loop is kept), and parallel tool results are sorted by call order.
+
+| 32k, `llm-inference-bench` | c1 steps/s | c1 tok/s | coding mean / max | c4 aggregate | c8 aggregate |
+| --- | --- | --- | --- | --- | --- |
+| `.5` default (cap 24) | 83 | 216-228 | 336-341 / 367-374 | 443-460 | 735-752 |
+| + skinny GEMM + radix top-k | 85.3 | 221 | 354 / 371 | 465 | 749 |
+| **`.6` = + phased all-reduce** | **85.4-86.5** | **221-232** | **351-365 / 364-383** | 446 | 751 |
+
+Measured on the overlay and re-checked on the pushed `.6` image (three c1 runs: 83.2 / 85.9 / 85.4 steps/s; kernels confirmed
+mapped in every worker). Correctness: 43-item greedy eval 42/43 (same as the baseline), **c8 KV stress PASS** (16/16 + 136/136, 9.56M prompt
+tokens through the 2.18M pool, min free VRAM 543 MiB, 0 bad log lines;
+[`qualification/brrr-tp3/`](qualification/brrr-tp3/)), hotel-lights c4 x30 **30/30 exact**, 0 truncated (mean 21,125 tokens; baseline 30/30 at 21,152), LiveBench coding
+**84.2** (LCB_generation 74.4 / coding_completion 94.0; same 2024-11-25 release, temperature 1.0, 32K budget, 0 empty answers,
+longest 31,615 tokens) vs 81.9 on `.4`/`.5` (71.8 / 92.0) — within sampling spread, no regression.
+
+**Not ported (measured, parked).** BRRR's *sparse decode attention* kernel tiles 16 heads; our padded TP3 layout has
+24 per rank. Resized to fit the sm_120 99 KB shared-memory limit it runs but produces wrong output (two 16-row
+tiles are needed). Its *fused decoder layer* (one persistent kernel per layer incl. both all-reduces, the big win
+at TP4) reads expert scales directly, and this stack keeps the MXFP4 expert scales CSF-compressed, decompressed
+inline by b12x's own MoE kernels; feeding it would mean porting the CSF reader into an 83 KB kernel, and running
+without CSF costs ~4.5 GB/GPU, more than the whole promoted expert set. *Vocab-split sampling* is auto-disabled at
+TP3 by the padded vocab (129,280 -> 129,408) and is worth ~1-2% now that the all-gather is cheap. The CUDA
+extensions compile for sm_120a during `docker build` (`patch-brrr/image/Dockerfile`, ~3 min); set
+`BRRR_TP3_LOG=1` to log once per worker which kernels engaged.
 
 ## Update 2026-10-31 (b): cap-only adaptive verification — c6 +24%, c8 +23%, c1/c4 unchanged
 
@@ -493,6 +535,9 @@ other GPU power limits.
 - `compose.yaml` (defaults: image `.4`, offload 20-33, 1.5 GiB reserve, blended expert order), `.env.example`,
   `kv.sh` + `kv-2x/4x/6x/8x.yaml` (KV presets), `k7.yaml` + `ds41-launch-k7.yaml` (7-draft coding preset), `compose.nvfp4.yaml` (dev overlay mounting the `patch-nvfp4/work/` sources
   instead of using the `.4` image), `expert-order-blend/` (route counts: 0.6 coding traffic + 0.4 prose).
+- `patch-brrr/`: the BRRR TP3 port (`brrr/` package incl. kernels, `brrr.pth` import hook, `vllm-patched/` = our three vLLM files
+  with BRRR's attention/renderer/tokenizer hunks applied (`stage1.patch`), `image/Dockerfile` that bakes it into `.6`, `LICENSE-brrr`,
+  `NOTICE-brrr`); `qualification/brrr-tp3/` holds its stress and eval results.
 - `patch-rowcap/`: the cap-only adaptive-verification patch (`adaptive_verification.py`) and the `image/Dockerfile` that bakes
   it into `.5` on top of `.4`.
 - `patch-nvfp4/`: the eight patched Python files (`work/`), the thin `image/Dockerfile` that bakes them into `.4`,
@@ -509,8 +554,9 @@ other GPU power limits.
 | Variable | Default | Values |
 | --- | --- | --- |
 | `HF_CACHE_DIR` | required | Hugging Face cache containing the weights repo below |
+| `BRRR_TP3_LOG` | `0` | `1` = log once per worker which BRRR TP3 kernels engaged (image `.6`) |
 | `DS41_VERIFY_ROW_CAP` | `24` | cap-only adaptive verification: all drafts verified while decoding requests' rows fit under the cap, trimmed above; `0` = upstream cost-model adaptive (needs `.5`) |
-| `DS41_IMAGE` | `azallaza/ds41-kraken-tp3:20261019.5` | image tag; `.5` = `.4` + cap-only adaptive verification; `.4` = `.3` + MXFP4-Engram/NVFP4 patches baked in (inert for stock weights) |
+| `DS41_IMAGE` | `azallaza/ds41-kraken-tp3:20261019.6` | image tag; `.6` = `.5` + BRRR TP3 kernels; `.5` = `.4` + cap-only adaptive verification; `.4` = `.3` + MXFP4-Engram/NVFP4 patches baked in (inert for stock weights) |
 | `B12X_EXPERT_ORDER_DIR` | `/opt/ds41/expert-order-blend` | expert promotion order (route counts); `/opt/ds41/expert-order` = the image's baked order |
 | `B12X_EXPERT_ROUTES_ALL` | `0` | `1` = dump per-layer route counts every 30 s to build your own order (~0.5-1% while on) |
 | `MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash-1017` | weights repo to serve; see [Alternative weights](#alternative-weights) and the 4-bit Engram variants in [README-engram-nvfp4.md](README-engram-nvfp4.md) (`local/DeepSeek-V4.1-Flash-1017-engram-nvidia` recommended) |
@@ -527,7 +573,7 @@ other GPU power limits.
 ## compose.yaml
 
 ```yaml
-# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.5
+# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.6
 # (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/,
 #  + the 2026-10-31 MXFP4-Engram / NVFP4-expert patches in patch-nvfp4/, inert for stock weights).
 # Defaults: original deepseek-ai weights (MXFP4 experts, lossless), DSpark 5 drafts with
@@ -540,7 +586,7 @@ other GPU power limits.
 # and ~256 GB host RAM. Tested at 450 W/GPU (350 W works; power only affects prefill).
 services:
   ds41-kraken-tp3:
-    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.5}"
+    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.6}"
     container_name: ds41-kraken-tp3
     # unless-stopped: auto-start on host reboot / daemon restart, but respect a manual `stop`.
     restart: "unless-stopped"
@@ -612,6 +658,8 @@ services:
       # c8 +23% aggregate, c1/c4 unchanged (2026-10-31). 0 = upstream's cost-model adaptive (c1 -11%);
       # to verify every draft at any concurrency set adaptive-verification: false in ds41-launch.yaml.
       DS41_VERIFY_ROW_CAP: "${DS41_VERIFY_ROW_CAP:-24}"
+      # 1 = log once per worker which BRRR TP3 kernels engaged (skinny GEMM, radix top-k, phased all-reduce). Image .6.
+      BRRR_TP3_LOG: "${BRRR_TP3_LOG:-0}"
       # Engram layers whose tables live in pinned host RAM (31.5 GiB per GPU worker each).
       # Both tables (1,14) do not fit next to the parked expert layers on 256 GB.
       DS41_ENGRAM_RAM_LAYERS: "${ENGRAM_RAM_LAYERS:-1}"

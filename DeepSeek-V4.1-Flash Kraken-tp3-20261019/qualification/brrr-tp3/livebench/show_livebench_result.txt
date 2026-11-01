@@ -1,0 +1,14 @@
+########## All Tasks ##########
+task                      LCB_generation  coding_completion
+model                                                      
+deepseek-v4.1-flash               71.795               92.0
+deepseek-v4.1-flash-brrr          74.359               94.0
+
+########## All Groups ##########
+category                  coding
+model                           
+deepseek-v4.1-flash-brrr    84.2
+deepseek-v4.1-flash         81.9
+done 21:50
+
+[exited with code 0]
