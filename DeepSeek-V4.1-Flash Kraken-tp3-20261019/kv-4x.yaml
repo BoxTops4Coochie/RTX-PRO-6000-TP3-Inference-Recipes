@@ -1,4 +1,4 @@
-# KV preset "4x": 4.75 GiB -> 4,614,187 tokens (4.4 x 1M). Image .9 @32k, 350 W: c1 91.3 steps/s 235 tok/s, c4 453, c8 771 tok/s agg, coding 366 / 398. Promotion 17/24 + 18/24.
+# KV preset "4x": 4.75 GiB -> 4,614,187 tokens (4.4 x 1M). Image .10 @32k, 350 W: c1 93.8 steps/s 254 tok/s, c4 460, c8 751 tok/s agg, coding 365 / 380. Promotion 17/24 + 18/24.
 # Usage: docker compose -f compose.yaml -f kv-4x.yaml up -d --force-recreate
 # (Overrides KV_CACHE_MEMORY_BYTES from .env; the VRAM comes out of expert promotion.)
 services:

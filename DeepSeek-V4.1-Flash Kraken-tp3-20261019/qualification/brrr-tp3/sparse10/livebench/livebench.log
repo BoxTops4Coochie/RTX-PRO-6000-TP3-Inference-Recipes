@@ -1,0 +1,662 @@
+👋 This is mini-swe-agent version 1.13.3.
+Loading global config from '/home/aabduh/.config/mini-swe-agent/.env'
+Questions from live_bench/coding/LCB_generation
+Questions from live_bench/coding/coding_completion
+Running 128 questions together across 1 benchmark(s)
+Model API name:  DeepSeek-V4.1-Flash
+Evaluating  128  questions with model  deepseek-v4.1-flash
+Processing 128 standard questions
+Incremental grading ON: pool of 16 grading workers alongside answer generation
+  0%|          | 0/128 [00:00<?, ?it/s]  1%|          | 1/128 [00:02<04:28,  2.12s/it]/home/aabduh/LiveBench/livebench/if_runner/ifbench/instructions_util.py:1554: RuntimeWarning: NLTK will not read data from '/home/aabduh/nltk_data': it is writable by, or owned by, another account, so a planted or rewritten file would be loaded as trusted data. Make it private to its owner (chmod go-w).
+  nltk.data.find("tokenizers/punkt")
+/home/aabduh/LiveBench/.venv/lib/python3.12/site-packages/nltk/data.py:1531: RuntimeWarning: NLTK will not read data from '/home/aabduh/nltk_data': it is writable by, or owned by, another account, so a planted or rewritten file would be loaded as trusted data. Make it private to its owner (chmod go-w).
+  return find(modified_name, paths)
+/home/aabduh/LiveBench/.venv/lib/python3.12/site-packages/nltk/downloader.py:1554: UserWarning: NLTK will not authorize the non-private download directory '/home/aabduh/nltk_data': it (or an ancestor) is world- or group-writable, so another local user could plant files there. Choose a private location such as ~/nltk_data.
+  for msg in self.incr_download(
+/home/aabduh/LiveBench/.venv/lib/python3.12/site-packages/nltk/downloader.py:980: UserWarning: NLTK will not authorize the non-private download directory '/home/aabduh/nltk_data': it (or an ancestor) is world- or group-writable, so another local user could plant files there. Choose a private location such as ~/nltk_data.
+  for msg in self.incr_download(info_or_id, download_dir, force, (), extract):
+  2%|▏         | 2/128 [00:03<03:26,  1.64s/it][nltk_data] Downloading package punkt to /home/aabduh/nltk_data...
+[nltk_data] Refusing to install into '/home/aabduh/nltk_data': it is
+[nltk_data]     writable by, or owned by, another account, so a file
+[nltk_data]     swapped in during the install would be installed as
+[nltk_data]     trusted data. Make it private to its owner (chmod
+[nltk_data]     go-w).
+Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 12.05it/s]
+question: 0664f46bd7bf6217d229be6762834af2aa642e7b97b14469f478c93a382ee520, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.02it/s][A100%|██████████| 1/1 [00:00<00:00,  8.28it/s]
+question: eecef5ebcd4b0224ec2404b15759eae2703c32db82dc7fd711af23c0dffc888a, model: deepseek-v4.1-flash-img10, score: 1, 
+  2%|▏         | 3/128 [00:04<02:51,  1.37s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.34it/s]
+question: f62daa0a810a70c8048484566eb0dcfb331b5299ce2a104f71cbbed4a98ed2b1, model: deepseek-v4.1-flash-img10, score: 1, 
+  3%|▎         | 4/128 [00:04<02:01,  1.02it/s]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 11.45it/s]
+question: 6cb0c2d9892875f79d632e273efd7ae3fa4ccb324fbce753673b8314aa80c737, model: deepseek-v4.1-flash-img10, score: 1, 
+  4%|▍         | 5/128 [00:06<02:30,  1.22s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.96it/s][A100%|██████████| 1/1 [00:00<00:00,  6.37it/s]
+question: 507f6dbb4e7d52e6f645b33aa73096e076769e196010810eeca84820375d4211, model: deepseek-v4.1-flash-img10, score: 0, 
+Evaluating 1...  5%|▍         | 6/128 [00:07<02:22,  1.17s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 11.13it/s]
+question: 7ac5182f5b8a86a644e912d6146da1290f785382a6c178512d8348a055e0a976, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1...  5%|▌         | 7/128 [00:08<02:20,  1.16s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.93it/s][A100%|██████████| 1/1 [00:00<00:00,  8.08it/s]
+question: 412707cd401e505990ba7dcc4fae0938537212b798cafd0cabd0ec75220baecf, model: deepseek-v4.1-flash-img10, score: 1, 
+  6%|▋         | 8/128 [00:09<01:56,  1.03it/s]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  4.19it/s][A100%|██████████| 1/1 [00:00<00:00,  3.95it/s]
+question: 75a3057122fddbd336b3e9a664d6254556cc1854312b07188cb719b9636a0acc, model: deepseek-v4.1-flash-img10, score: 0, 
+Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.74it/s]
+question: 5a17ebccc62403424aaaa96b3fe4b93604c49ef84c15556490d7e86b10b5126f, model: deepseek-v4.1-flash-img10, score: 1, 
+  8%|▊         | 10/128 [00:11<02:12,  1.12s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 11.16it/s]
+question: 63a5960e3858d9b8ca8f734d21ac4828a9d96f67596da0b29f7b3c6b1298aee2, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1...  9%|▊         | 11/128 [00:13<02:19,  1.19s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 11.46it/s]
+question: 0c1688303f94019295a1fe3d5d691494e6226647d863fbaf7205cd12573d1dd5, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1...  9%|▉         | 12/128 [00:13<01:55,  1.00it/s]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.33it/s]
+question: 65369f81842e0735d0dd6619a120d5760217c9b8ac481de89cc20983ea555953, model: deepseek-v4.1-flash-img10, score: 0, 
+Evaluating 1... 10%|█         | 13/128 [00:15<02:06,  1.10s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.71it/s]
+question: 3e0ba617402710c701decb2edec4b14fb15a84d74dd02510fd932f3902be1827, model: deepseek-v4.1-flash-img10, score: 1, 
+ 11%|█         | 14/128 [00:17<02:52,  1.51s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  4.49it/s][A100%|██████████| 1/1 [00:00<00:00,  4.25it/s]
+question: 09c0c67ed82f00989b1c9c48646e2c31c89b81dd2afc922cf241ba082afef18b, model: deepseek-v4.1-flash-img10, score: 1, 
+ 12%|█▏        | 15/128 [00:20<03:22,  1.79s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.29it/s][A100%|██████████| 1/1 [00:00<00:00,  5.90it/s]
+question: a762c0ca6500a33a975869105641d3d4fbaf897051bacc2d6fbe83bc3de23bd9, model: deepseek-v4.1-flash-img10, score: 1, 
+ 12%|█▎        | 16/128 [00:22<03:42,  1.99s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.58it/s][A100%|██████████| 1/1 [00:00<00:00,  6.07it/s]
+question: 109469ec1296f25ee25bc3a09e4265a5df823816b438d97cb3d2ba15717626b5, model: deepseek-v4.1-flash-img10, score: 1, 
+ 13%|█▎        | 17/128 [00:24<03:44,  2.02s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 11.17it/s]
+question: 89cad09d866391980ddbdbe8208870d1792916fc0e7862f2f27744153ccf9eea, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 14%|█▍        | 18/128 [00:25<03:05,  1.69s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 10.23it/s]
+question: 8b720a5b61bea0e6a0dcfba224824fff2f48c1d21ef3ae9695d3ec9c84f621d1, model: deepseek-v4.1-flash-img10, score: 0, 
+ 15%|█▍        | 19/128 [00:32<05:44,  3.16s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  4.50it/s][A100%|██████████| 1/1 [00:00<00:00,  4.25it/s]
+question: 832eb791ff0dae774b2f1d75ba01356d9f49fead0dacaa466d83fb1e59a8dd78, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 16%|█▌        | 20/128 [00:33<04:30,  2.51s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 10.82it/s]
+question: 5a126374e3885ec262a06ef4f7eaafd34477f3bc68ba8e6b04123c2c32e7352d, model: deepseek-v4.1-flash-img10, score: 1, 
+ 16%|█▋        | 21/128 [00:35<04:17,  2.41s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 10.57it/s]
+question: d414f7768eb066f524236800aa2dbb8a4554f2e4abc22a99ef88fe30cbcc308e, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 17%|█▋        | 22/128 [00:36<03:26,  1.95s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.96it/s]
+question: 6afe4974569ffea0733fb153fa9bc6ea75c6ada73e3095b7a3efb65fabbfae06, model: deepseek-v4.1-flash-img10, score: 1, 
+ 18%|█▊        | 23/128 [00:48<08:43,  4.98s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.23it/s][A100%|██████████| 1/1 [00:00<00:00,  5.65it/s]
+question: e1e226d29b9ab59fc2de2d719a0e7117572f7bd9dc375709a92a673987c1b29d, model: deepseek-v4.1-flash-img10, score: 0, 
+ 19%|█▉        | 24/128 [00:50<07:14,  4.18s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 10.77it/s]
+question: 01c73e7f5bd7b486915f97829994aca9b95d6116c510d9f3781b5399dea066bd, model: deepseek-v4.1-flash-img10, score: 1, 
+ 20%|█▉        | 25/128 [00:55<07:46,  4.53s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.16it/s][A100%|██████████| 1/1 [00:00<00:00,  5.57it/s]
+question: 88d41d97990a9e7f990eb8eb71440d007fd194758ce2c3fe00b77e186fd65c3d, model: deepseek-v4.1-flash-img10, score: 1, 
+ 20%|██        | 26/128 [00:57<06:07,  3.60s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.38it/s]
+question: 27c31c63ff778ef9594589756be22b75959369914a5b4fae17fa3255927e1dc4, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 21%|██        | 27/128 [00:59<05:27,  3.24s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 10.38it/s]
+question: 89101e97bd95e50c1d5d9db784d73f2894a20e4c2ed3e67cf124c7959f8ab4dd, model: deepseek-v4.1-flash-img10, score: 1, 
+ 22%|██▏       | 28/128 [01:01<04:46,  2.87s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.54it/s][A100%|██████████| 1/1 [00:00<00:00,  6.83it/s]
+question: 3de555bbcef9919a92a742dd969301eaea38baee624b4c4851e6a495cc83b3cf, model: deepseek-v4.1-flash-img10, score: 0, 
+ 23%|██▎       | 29/128 [01:05<05:02,  3.05s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  3.37it/s][A100%|██████████| 1/1 [00:00<00:00,  3.24it/s]
+question: 176daded29d196e2697bff1351ef4a77c31ffad3757b20405a6c7a346af31ddb, model: deepseek-v4.1-flash-img10, score: 0, 
+Evaluating 1... 23%|██▎       | 30/128 [01:06<04:05,  2.51s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 10.19it/s]
+question: e882b58cb776d5ecbd45f20da44a2628df326ee12c927f4ebb751222629601b1, model: deepseek-v4.1-flash-img10, score: 1, 
+ 24%|██▍       | 31/128 [01:10<04:43,  2.92s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 10.12it/s]
+question: 7c1f49314f2c261404fdd7c795620c2fc92d4545bdccc3fc59a15cf3193dba0b, model: deepseek-v4.1-flash-img10, score: 1, 
+ 25%|██▌       | 32/128 [01:15<05:47,  3.62s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  3.44it/s][A100%|██████████| 1/1 [00:00<00:00,  3.30it/s]
+question: 23132a8725620697e72843b28d711947911252925ddaec701e17d85564165c4f, model: deepseek-v4.1-flash-img10, score: 1, 
+ 26%|██▌       | 33/128 [01:16<04:17,  2.72s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.03it/s][A100%|██████████| 1/1 [00:00<00:00,  8.39it/s]
+question: 03741bcada4e970eedeb7f28fdf45c496779b98f3df8e513f992a51cf072f67c, model: deepseek-v4.1-flash-img10, score: 1, 
+ 27%|██▋       | 34/128 [01:26<07:37,  4.87s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.89it/s][A100%|██████████| 1/1 [00:00<00:00,  8.66it/s]
+question: ef2c6b4ab2f09b2f310eff0a1e7c7e22e9ed12a554aa667dc9d7162fdb123f50, model: deepseek-v4.1-flash-img10, score: 0, 
+ 27%|██▋       | 35/128 [01:33<08:47,  5.67s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.59it/s][A100%|██████████| 1/1 [00:00<00:00,  8.86it/s]
+question: 306525ba191d9f60529c2b5a3b3fb659106ca56db058b66b4181904705a84aab, model: deepseek-v4.1-flash-img10, score: 1, 
+ 28%|██▊       | 36/128 [01:35<06:43,  4.39s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.94it/s]
+question: ffdb71c563e5f8e936ab2649a069bfbdbebcde991c6ae11a2e83ec18c0d8e50d, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 29%|██▉       | 37/128 [01:36<05:19,  3.52s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 10.01it/s]
+question: ccf40d3ba5eed106abc518f7c58a4a72b5c1f732ec33cad5e0617b54ff46fa22, model: deepseek-v4.1-flash-img10, score: 1, 
+ 30%|██▉       | 38/128 [01:39<04:49,  3.22s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  5.57it/s][A100%|██████████| 1/1 [00:00<00:00,  5.11it/s]
+question: 992a18bff05e5db69cfeadf0d02b6dfd2808c0997c86e3cc1abb5a4fbd550c70, model: deepseek-v4.1-flash-img10, score: 0, 
+ 30%|███       | 39/128 [01:41<04:23,  2.96s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.95it/s][A100%|██████████| 1/1 [00:00<00:00,  8.02it/s]
+question: d5213885ecf30ec0d5b6fa5e53af31eb5ed207d3257b2ae8843b1eed735ac7a5, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 31%|███▏      | 40/128 [01:44<04:32,  3.09s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 10.03it/s]
+question: c675d9db6b456f793da486f16102468ed1e241bbb7846039608b2c0f9c5d1012, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 32%|███▏      | 41/128 [01:46<03:40,  2.53s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.62it/s][A100%|██████████| 1/1 [00:00<00:00,  7.73it/s]
+question: 5a87f768962bad5e67430639470f03835d0f2abf3fb39f38cf96145ce768f485, model: deepseek-v4.1-flash-img10, score: 1, 
+ 33%|███▎      | 42/128 [01:46<02:53,  2.02s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.43it/s][A100%|██████████| 1/1 [00:00<00:00,  6.71it/s]
+question: df00a4688e96b001f32ffd39913ae151bfa14034bdca636193c96974529f7cf9, model: deepseek-v4.1-flash-img10, score: 0, 
+Evaluating 1... 34%|███▎      | 43/128 [01:47<02:15,  1.60s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.55it/s][A100%|██████████| 1/1 [00:00<00:00,  8.81it/s]
+question: e4ee35e76ddb5c90ccea3e6aa41f00de01b44122d4d602dd4a0da6892757e3af, model: deepseek-v4.1-flash-img10, score: 1, 
+ 34%|███▍      | 44/128 [01:49<02:30,  1.79s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  3.37it/s][A100%|██████████| 1/1 [00:00<00:00,  3.17it/s]
+question: 3d2aec36cd900b962211c24ae69daf2692f7200fe06d34c7a236d531d0a3c17f, model: deepseek-v4.1-flash-img10, score: 0, 
+ 35%|███▌      | 45/128 [01:51<02:22,  1.71s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.87it/s][A100%|██████████| 1/1 [00:00<00:00,  7.15it/s]
+question: 5afb74e155e6538cd76e64fc9df21bd78073b280f0b95b675cbb86aa877b2a59, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 36%|███▌      | 46/128 [02:58<29:21, 21.48s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00, 10.36it/s]
+question: 3375d42f6db384f62b159eb89a85d715736790fd1abb380760ffbd12339fd4d5, model: deepseek-v4.1-flash-img10, score: 1, 
+ 37%|███▋      | 47/128 [03:08<24:19, 18.02s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.34it/s][A100%|██████████| 1/1 [00:00<00:00,  5.83it/s]
+question: 7439c76752648b2b25924c0810d91f130b7bea2192c80a2603d5662b0685391a, model: deepseek-v4.1-flash-img10, score: 1, 
+ 38%|███▊      | 48/128 [03:17<20:04, 15.06s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.29it/s][A100%|██████████| 1/1 [00:00<00:00,  7.44it/s]
+question: 89ca002eeeb0c60dbdd4ba3c8129b1d38672338a0375643ac3f942eca79bc7cc, model: deepseek-v4.1-flash-img10, score: 1, 
+ 38%|███▊      | 49/128 [03:18<14:21, 10.91s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.50it/s]
+question: a326807520b5d18b9a6fa534c086ba3ba53ec6481d9a30222b1b09a6b6699483, model: deepseek-v4.1-flash-img10, score: 1, 
+ 39%|███▉      | 50/128 [03:19<10:17,  7.92s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.54it/s][A100%|██████████| 1/1 [00:00<00:00,  7.67it/s]
+question: d761bf4d5741e128fca776f16db3dd1d6265291dc5dbe0831033d5918188ada0, model: deepseek-v4.1-flash-img10, score: 1, 
+ 40%|███▉      | 51/128 [03:31<11:52,  9.26s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  5.75it/s][A100%|██████████| 1/1 [00:00<00:00,  5.33it/s]
+question: d191855119f72c53a37db900f0fbf8d177bb12c255da8284af51335e57272f83, model: deepseek-v4.1-flash-img10, score: 0, 
+ 41%|████      | 52/128 [03:38<10:59,  8.68s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  1.41it/s][A100%|██████████| 1/1 [00:00<00:00,  1.38it/s]
+question: db5240d8bb9da989f3ffea465538592857f8fa5b7d4293579356c8456253e721, model: deepseek-v4.1-flash-img10, score: 1, 
+ 41%|████▏     | 53/128 [03:39<07:53,  6.32s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  3.63it/s][A100%|██████████| 1/1 [00:00<00:00,  3.45it/s]
+question: 042b958543e9a61fd083dfd6067a91845b8e272295a282512ec9b527cff2e113, model: deepseek-v4.1-flash-img10, score: 0, 
+ 42%|████▏     | 54/128 [03:40<05:53,  4.78s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.37it/s][A100%|██████████| 1/1 [00:00<00:00,  7.51it/s]
+question: 232d3a9537df2b3af811ae7ba1baac43ebf6a1971c98c7bf0ea84d73eba4c506, model: deepseek-v4.1-flash-img10, score: 1, 
+ 43%|████▎     | 55/128 [03:42<04:50,  3.98s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  4.85it/s][A100%|██████████| 1/1 [00:00<00:00,  4.50it/s]
+question: 388e39eefc4d3950ad99966e9c8dfbf64b59991d7e6cc2d9fb0a617f4025475e, model: deepseek-v4.1-flash-img10, score: 0, 
+ 44%|████▍     | 56/128 [03:45<04:18,  3.59s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.01it/s][A100%|██████████| 1/1 [00:00<00:00,  6.59it/s]
+question: b8637ee53e144cd0f68a891e7962df2b44c1949cbbdf46670c49b92f29b8bf46, model: deepseek-v4.1-flash-img10, score: 1, 
+ 45%|████▍     | 57/128 [03:48<03:57,  3.34s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  2.34it/s][A100%|██████████| 1/1 [00:00<00:00,  2.28it/s]
+question: af9c90d1566582311697d76693eb2be23401bc8fbb7e8b0e595a4080a53e3fa6, model: deepseek-v4.1-flash-img10, score: 1, 
+ 45%|████▌     | 58/128 [03:50<03:25,  2.93s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.43it/s][A100%|██████████| 1/1 [00:00<00:00,  7.52it/s]
+question: e4386373494a3b0a70dc5acb7d3a21eb4dc8dc53d4afafcc2d057d16fb68a0a1, model: deepseek-v4.1-flash-img10, score: 1, 
+ 46%|████▌     | 59/128 [03:51<02:53,  2.51s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.23it/s]
+question: 87871f3ecdda8c4583b2834741bb312a3917c9035cd21d151902b9eae123e17c, model: deepseek-v4.1-flash-img10, score: 1, 
+ 47%|████▋     | 60/128 [03:53<02:22,  2.10s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.48it/s][A100%|██████████| 1/1 [00:00<00:00,  6.70it/s]
+question: 9026b23d1094bb0072bae31bd66f9a8cc7220e3951dc520c53a2f21c4e8a472c, model: deepseek-v4.1-flash-img10, score: 1, 
+ 48%|████▊     | 61/128 [04:16<09:24,  8.43s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.05it/s][A100%|██████████| 1/1 [00:00<00:00,  6.38it/s]
+question: 55893da1c59947e4e7469ad4b0683142b475556a6368135400c20a3d8f43def8, model: deepseek-v4.1-flash-img10, score: 0, 
+ 48%|████▊     | 62/128 [04:17<06:44,  6.12s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.97it/s][A100%|██████████| 1/1 [00:00<00:00,  7.17it/s]
+question: 5d2c5a95687741962e9fa5f3a5c8ca8cda81c66617f61c3ce119349914f9f1d4, model: deepseek-v4.1-flash-img10, score: 1, 
+ 49%|████▉     | 63/128 [04:22<06:32,  6.04s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  4.57it/s][A100%|██████████| 1/1 [00:00<00:00,  4.33it/s]
+question: 7f4101a7131ddc370238e7180e5a6b07a534141417b01a5b83a9ab33ea26b0d6, model: deepseek-v4.1-flash-img10, score: 1, 
+ 50%|█████     | 64/128 [04:24<04:57,  4.65s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  5.60it/s][A100%|██████████| 1/1 [00:00<00:00,  5.11it/s]
+question: 39d2dcf38a69f076f8cd3af146650328044014addb6c2f6abd7ae51d56c56869, model: deepseek-v4.1-flash-img10, score: 0, 
+ 51%|█████     | 65/128 [04:24<03:32,  3.38s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.95it/s][A100%|██████████| 1/1 [00:00<00:00,  8.71it/s]
+question: f78df88e6755702752e1c216f9734cbf1803a006546503128acb8747aee1a738, model: deepseek-v4.1-flash-img10, score: 1, 
+ 52%|█████▏    | 66/128 [04:28<03:30,  3.40s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  5.26it/s][A100%|██████████| 1/1 [00:00<00:00,  4.82it/s]
+question: 588bc5f2d796806fc8d50bb1746f5bdf495dce0f1a752ea2dc5fe89d3e1b5f60, model: deepseek-v4.1-flash-img10, score: 0, 
+ 52%|█████▏    | 67/128 [04:36<04:55,  4.85s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  5.17it/s][A100%|██████████| 1/1 [00:00<00:00,  4.81it/s]
+question: d9c8393373b3a80ed8f75ad3fbfbe74740f1799b3f2ae7a12486ec41a14aca53, model: deepseek-v4.1-flash-img10, score: 1, 
+ 53%|█████▎    | 68/128 [04:39<04:15,  4.25s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  3.86it/s][A100%|██████████| 1/1 [00:00<00:00,  3.64it/s]
+question: df2028f3f71248ce456f02f00f5e542660904738e6cd45061a0c7c5662c3d2b4, model: deepseek-v4.1-flash-img10, score: 1, 
+ 54%|█████▍    | 69/128 [04:44<04:24,  4.48s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.84it/s][A100%|██████████| 1/1 [00:00<00:00,  6.20it/s]
+question: 556eb10bbb584e5dc57d787eede0ca725d3d509ff39849a89b568e4ca9f2dc8e, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A 55%|█████▍    | 70/128 [04:45<03:16,  3.39s/it]
+100%|██████████| 1/1 [00:00<00:00,  9.32it/s][A100%|██████████| 1/1 [00:00<00:00,  8.46it/s]
+question: 640e8e5a789f35ff19127fc822b980499f8db1eb0127e0ad642f0f01c425e463, model: deepseek-v4.1-flash-img10, score: 1, 
+ 55%|█████▌    | 71/128 [04:51<04:10,  4.40s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.54it/s][A100%|██████████| 1/1 [00:00<00:00,  8.49it/s]
+question: cd2f643fc3de0dbcb738ea9f8ca03f738a76bea2110d7dd97ccf0d8e418a8694, model: deepseek-v4.1-flash-img10, score: 1, 
+ 56%|█████▋    | 72/128 [04:56<04:03,  4.36s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  4.49it/s][A100%|██████████| 1/1 [00:00<00:00,  4.16it/s]
+question: 30cd4633ff2a6f4acc868ddd9dcc076c4a8eae5a7a18c736c9c7504c1e55a516, model: deepseek-v4.1-flash-img10, score: 0, 
+ 57%|█████▋    | 73/128 [04:57<03:07,  3.42s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  3.04it/s][A100%|██████████| 1/1 [00:00<00:00,  2.93it/s]
+question: 6a84becb148316106cde53436e3c0b4033d7957dc1e2e3e2d7d30e712a49ecbf, model: deepseek-v4.1-flash-img10, score: 1, 
+ 58%|█████▊    | 74/128 [05:25<09:39, 10.73s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.52it/s]
+question: 2a0f52cd0d54e167a9d1b9bcb7fcb76d565f37019a19971b7377297c5835cec1, model: deepseek-v4.1-flash-img10, score: 1, 
+ 59%|█████▊    | 75/128 [05:30<08:06,  9.19s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  2.37it/s][A100%|██████████| 1/1 [00:00<00:00,  2.26it/s]
+question: cf932b62f91764e164fa14f8b4f50ad8346b1b653765fb9fdec13d372b10be73, model: deepseek-v4.1-flash-img10, score: 0, 
+ 59%|█████▉    | 76/128 [05:33<06:20,  7.32s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.35it/s]
+question: 1693afc152bb5f955ac7298d7381160294b7a32c0844c02817d7a66a0e028750, model: deepseek-v4.1-flash-img10, score: 0, 
+ 60%|██████    | 77/128 [05:35<04:56,  5.81s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.44it/s]
+question: 2ac5a0878eb181cefc6922338f7b043368fa897d089955b97eb0b6210f94f3e9, model: deepseek-v4.1-flash-img10, score: 0, 
+ 61%|██████    | 78/128 [05:37<03:46,  4.52s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.03it/s][A100%|██████████| 1/1 [00:00<00:00,  7.10it/s]
+question: b6a1eeb2bf7e0899432085c68d3f2a5e2395cb6adf1334495db344b742950c6c, model: deepseek-v4.1-flash-img10, score: 1, 
+ 62%|██████▏   | 79/128 [05:39<03:05,  3.78s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.93it/s]
+question: 6755f738cebb3ae683e9dcd2e56007bfac992a804648cc315cd88d8dc13a17e7, model: deepseek-v4.1-flash-img10, score: 1, 
+ 62%|██████▎   | 80/128 [05:40<02:15,  2.83s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.43it/s]
+question: 317b199a6aeaec75555a76bac287b3f795cc968930677de0fea1d039b055e90e, model: deepseek-v4.1-flash-img10, score: 1, 
+ 63%|██████▎   | 81/128 [05:43<02:22,  3.03s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.79it/s]
+question: 4952a5d420fa195e7b041251e85bce64c87b95e8f1cec05d7e16ce149e88c967, model: deepseek-v4.1-flash-img10, score: 1, 
+ 64%|██████▍   | 82/128 [05:47<02:28,  3.23s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.05it/s]
+question: 5c9d7ade302709f4bdcf6e3b64127d1e67a3a3078b3a03ef241329547cf320c6, model: deepseek-v4.1-flash-img10, score: 1, 
+ 65%|██████▍   | 83/128 [05:48<01:59,  2.65s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.93it/s]
+question: 5f7ac157843831b50cc45eb8991c1659e0196805ea75d99202624fa06cd61342, model: deepseek-v4.1-flash-img10, score: 1, 
+ 66%|██████▌   | 84/128 [05:50<01:46,  2.42s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.64it/s][A100%|██████████| 1/1 [00:00<00:00,  8.74it/s]
+question: 7ad613404830cbc9bd478f52fb74f5c73a2c55405938406316a2409e744783c8, model: deepseek-v4.1-flash-img10, score: 1, 
+ 66%|██████▋   | 85/128 [05:52<01:33,  2.16s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.98it/s][A100%|██████████| 1/1 [00:00<00:00,  8.66it/s]
+question: 795dd501310981efaa1cfe050e20d249d845dbc90df7e7c9b07bd1b1925b5263, model: deepseek-v4.1-flash-img10, score: 1, 
+ 67%|██████▋   | 86/128 [05:53<01:26,  2.05s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.93it/s][A100%|██████████| 1/1 [00:00<00:00,  8.68it/s]
+question: d5ecf69bb5d8e62278ed3d129812cdc0e9bfb90d8b6ca369847e6ed19edffffb, model: deepseek-v4.1-flash-img10, score: 1, 
+ 68%|██████▊   | 87/128 [05:54<01:05,  1.59s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.60it/s][A100%|██████████| 1/1 [00:00<00:00,  5.91it/s]
+question: 2cb17950d950274fe6858fb7157bc44e160006e47657e9ca7d3b669ec9a0ff07, model: deepseek-v4.1-flash-img10, score: 0, 
+ 69%|██████▉   | 88/128 [05:55<00:55,  1.39s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.79it/s]
+question: 0119bdbf9e79f05e988b6d3408e2fdc0b7e4bc11e81ff9f24bed96268c503801, model: deepseek-v4.1-flash-img10, score: 1, 
+ 70%|██████▉   | 89/128 [05:55<00:42,  1.09s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.18it/s]
+question: b8e56097d9b5740294ef468314833c875b1ffe610edae1c1c79b91f7c09b5ece, model: deepseek-v4.1-flash-img10, score: 1, 
+ 70%|███████   | 90/128 [05:59<01:07,  1.77s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.49it/s][A100%|██████████| 1/1 [00:00<00:00,  6.65it/s]
+question: 67a7d1cc72639935a09a3256d5a1aec2e55403972912391e7f5f079e69ee1cc7, model: deepseek-v4.1-flash-img10, score: 0, 
+ 71%|███████   | 91/128 [06:06<02:04,  3.36s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  4.40it/s][A100%|██████████| 1/1 [00:00<00:00,  4.11it/s]
+question: b122f7e6e1fa155665d3553c4cddf946c021fe467225f39dbd4dec56b813db1d, model: deepseek-v4.1-flash-img10, score: 1, 
+ 72%|███████▏  | 92/128 [06:10<02:10,  3.64s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  5.74it/s][A100%|██████████| 1/1 [00:00<00:00,  5.28it/s]
+question: 298828230337781810c328f815976e74c6c89c7b14b22beea1cb3d0dc1a7bcae, model: deepseek-v4.1-flash-img10, score: 1, 
+ 73%|███████▎  | 93/128 [06:38<06:29, 11.12s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.90it/s]
+question: 59c63e484f7d21595c2122342662bfc1b0c57f63f168f96fc45a27dc7bbc0a07, model: deepseek-v4.1-flash-img10, score: 0, 
+ 73%|███████▎  | 94/128 [07:03<08:33, 15.11s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  4.50it/s][A100%|██████████| 1/1 [00:00<00:00,  4.21it/s]
+question: a902525e385453571494ab18eaac931c67b171c8106286ba55221bbc89aa1d3b, model: deepseek-v4.1-flash-img10, score: 1, 
+ 74%|███████▍  | 95/128 [07:08<06:39, 12.09s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  1.68it/s][A100%|██████████| 1/1 [00:00<00:00,  1.63it/s]
+question: 16503edeb04a3a1af42e446248632951a149ca0cb3253c2e4fc91716ad53b5c7, model: deepseek-v4.1-flash-img10, score: 1, 
+ 75%|███████▌  | 96/128 [07:14<05:25, 10.17s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  1.32it/s][A100%|██████████| 1/1 [00:00<00:00,  1.29it/s]
+question: 049ed4055f772aa9bccfda47ae425ee8a3c16d2c74330818d0397890795ea7fb, model: deepseek-v4.1-flash-img10, score: 1, 
+ 76%|███████▌  | 97/128 [07:38<07:28, 14.48s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.81it/s]
+question: ebde77f9af990a37740871b38788987a907d4ab08556978324a42c3293bb68a9, model: deepseek-v4.1-flash-img10, score: 1, 
+ 77%|███████▋  | 98/128 [07:44<05:52, 11.74s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  5.55it/s][A100%|██████████| 1/1 [00:00<00:00,  5.14it/s]
+question: 9e895f817a6a867671d8735578f058a34a19dde837957b1a9c9347d7e13a8e38, model: deepseek-v4.1-flash-img10, score: 1, 
+ 77%|███████▋  | 99/128 [07:49<04:48,  9.93s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.36it/s][A100%|██████████| 1/1 [00:00<00:00,  8.17it/s]
+question: 59811e99700ace9d7a98d352e7970f6cd244e25344d349c12e96b18067777d54, model: deepseek-v4.1-flash-img10, score: 1, 
+ 78%|███████▊  | 100/128 [07:52<03:35,  7.71s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.95it/s][A100%|██████████| 1/1 [00:00<00:00,  8.69it/s]
+question: ab88e681245c5c93976393e5ee7f61a122aa12f9f5d970701d874335bf5a6362, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 79%|███████▉  | 101/128 [08:03<03:57,  8.79s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.92it/s]
+question: 6f128ce8389efae085f84f835f4678a214c45ca94cf7933178b07562789bc4d7, model: deepseek-v4.1-flash-img10, score: 1, 
+ 80%|███████▉  | 102/128 [08:10<03:37,  8.37s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.44it/s][A100%|██████████| 1/1 [00:00<00:00,  7.40it/s]
+question: e1553e31f9f0e93848a8e06d452fa0d6b8c4bf21580def1d98237dbac399baca, model: deepseek-v4.1-flash-img10, score: 1, 
+ 80%|████████  | 103/128 [08:15<03:01,  7.25s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  5.38it/s][A100%|██████████| 1/1 [00:00<00:00,  5.00it/s]
+question: fe6312c9e8cb798517e3695c245cbbfbf4fd6dc737903628abc4a2b55c3f4af5, model: deepseek-v4.1-flash-img10, score: 1, 
+ 81%|████████▏ | 104/128 [08:15<02:04,  5.18s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.79it/s][A100%|██████████| 1/1 [00:00<00:00,  7.81it/s]
+question: e25750fd4c8fae19856e77a875093ab90a6333a680ccbd45dbabdaddb205bf2a, model: deepseek-v4.1-flash-img10, score: 1, 
+ 82%|████████▏ | 105/128 [08:26<02:36,  6.80s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  5.23it/s][A100%|██████████| 1/1 [00:00<00:00,  4.78it/s]
+question: 786432ddcf555d879432b906560955b9d464831f713946ce0210dcba478becd2, model: deepseek-v4.1-flash-img10, score: 1, 
+ 83%|████████▎ | 106/128 [08:43<03:37,  9.89s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.51it/s][A100%|██████████| 1/1 [00:00<00:00,  7.50it/s]
+question: 37a9bdb633709429b87eae7e703feaf3ea5a8bd9ea41a33cb23c4c657d918768, model: deepseek-v4.1-flash-img10, score: 1, 
+ 84%|████████▎ | 107/128 [08:47<02:52,  8.21s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  4.85it/s][A100%|██████████| 1/1 [00:00<00:00,  4.51it/s]
+question: eae492105162057ac07f4920749d2125f86b5a335557c61d328d49f198af3343, model: deepseek-v4.1-flash-img10, score: 1, 
+ 84%|████████▍ | 108/128 [08:50<02:13,  6.67s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.90it/s][A100%|██████████| 1/1 [00:00<00:00,  6.20it/s]
+question: 541fd30fbc3ff5b8845fdef7e228778a903adab9d122280003aa2e8596aa2c63, model: deepseek-v4.1-flash-img10, score: 0, 
+ 85%|████████▌ | 109/128 [08:56<01:59,  6.30s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  1.82it/s][A100%|██████████| 1/1 [00:00<00:00,  1.77it/s]
+question: 009f4f7e8275c73de2eae601d76ff7163f613880788d870c1484b1c2a1383fbd, model: deepseek-v4.1-flash-img10, score: 1, 
+ 86%|████████▌ | 110/128 [09:02<01:50,  6.12s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.46it/s][A100%|██████████| 1/1 [00:00<00:00,  7.62it/s]
+question: 7ae9d085e0923cd5063163ca2628c4b9ecdf0a7ca192f3806bbaf16c735d4946, model: deepseek-v4.1-flash-img10, score: 1, 
+ 87%|████████▋ | 111/128 [09:06<01:37,  5.71s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.14it/s]
+question: 9ccb5f2d887b739bf9fa290e9b3098ed5c86da0de11b50b8128de0f8a7ff8e42, model: deepseek-v4.1-flash-img10, score: 1, 
+ 88%|████████▊ | 112/128 [09:09<01:16,  4.77s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.29it/s][A100%|██████████| 1/1 [00:00<00:00,  5.87it/s]
+question: 4f4e5b4d83cbc334fc40c3702b6abaaaa5c87ddf73d3103a8e0ef6c8002ecb01, model: deepseek-v4.1-flash-img10, score: 1, 
+ 88%|████████▊ | 113/128 [09:11<00:57,  3.84s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.67it/s][A100%|██████████| 1/1 [00:00<00:00,  6.84it/s]
+question: 15b97089ff238df02cdec621f3bd0d14e0b096e4d26d463e2bcb66a0fcb57a9c, model: deepseek-v4.1-flash-img10, score: 1, 
+ 89%|████████▉ | 114/128 [09:12<00:44,  3.19s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.34it/s][A100%|██████████| 1/1 [00:00<00:00,  6.77it/s]
+question: 7795fc4543dfb60b56345359d525454c6ec3af02be98fe13f98b34af41356500, model: deepseek-v4.1-flash-img10, score: 1, 
+ 90%|████████▉ | 115/128 [09:17<00:45,  3.52s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  7.33it/s][A100%|██████████| 1/1 [00:00<00:00,  6.66it/s]
+question: 945b77d39f64bc7e9076de58b48806c99c26ca7a45f94737fa80f0702625969c, model: deepseek-v4.1-flash-img10, score: 1, 
+ 91%|█████████ | 116/128 [09:18<00:34,  2.91s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  6.89it/s][A100%|██████████| 1/1 [00:00<00:00,  6.20it/s]
+question: 030471ea2fc50a29f82560555033ceaec6b127c9ad0f68d34565ba221279d54b, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 91%|█████████▏| 117/128 [09:25<00:46,  4.23s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.91it/s]
+question: a62c56a25fd1a6fb193268c07d5fa714d8fe8ef25aa8884d4f910e3f58dd51fe, model: deepseek-v4.1-flash-img10, score: 1, 
+ 92%|█████████▏| 118/128 [09:33<00:51,  5.15s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.98it/s]
+question: 368b91cf69b159b1a3ef4740009cb201b46ea95478c9c5fc17df884b825ccacb, model: deepseek-v4.1-flash-img10, score: 0, 
+ 93%|█████████▎| 119/128 [09:36<00:42,  4.67s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  2.83it/s][A100%|██████████| 1/1 [00:00<00:00,  2.71it/s]
+question: 5ced71fafeb7058ec2edec54fe4022058381689584152f36fba4aec109081931, model: deepseek-v4.1-flash-img10, score: 1, 
+ 94%|█████████▍| 120/128 [09:41<00:37,  4.67s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.25it/s]
+question: 4b6062ff2bb0859fc70acfbdca5f67617a5d5e631cb2fc650b8f641c237acb44, model: deepseek-v4.1-flash-img10, score: 1, 
+Evaluating 1... 95%|█████████▍| 121/128 [09:45<00:30,  4.42s/it]
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.89it/s]
+question: 7878539e8dd4fe1d4bc66a440e16c102d66f158fed7828a84f3765505ba8f1d3, model: deepseek-v4.1-flash-img10, score: 1, 
+ 95%|█████████▌| 122/128 [09:50<00:28,  4.70s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  9.12it/s]
+question: 26aa1d9bdee3ca21ecb30b18871b017f5013da90f96af113e433e9172f600342, model: deepseek-v4.1-flash-img10, score: 1, 
+ 96%|█████████▌| 123/128 [09:56<00:24,  4.98s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  9.69it/s][A100%|██████████| 1/1 [00:00<00:00,  8.48it/s]
+question: 3cd8c16a338ab1b2d081add09e47c05cd4bad6c4ddd20c12356d911502fc54a0, model: deepseek-v4.1-flash-img10, score: 1, 
+ 97%|█████████▋| 124/128 [10:00<00:18,  4.66s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  4.97it/s][A100%|██████████| 1/1 [00:00<00:00,  4.57it/s]
+question: 447b358040b99c91a12a17ec5e81ee3bdc257155200b3cec64c115166f7e12a9, model: deepseek-v4.1-flash-img10, score: 1, 
+ 98%|█████████▊| 125/128 [10:06<00:15,  5.06s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A100%|██████████| 1/1 [00:00<00:00,  8.98it/s]
+question: e2ee8ea63cf9d79d7695c7e310de966d5cf7f96f103b706faa930557991fc816, model: deepseek-v4.1-flash-img10, score: 1, 
+ 98%|█████████▊| 126/128 [10:33<00:23, 11.61s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  1.60it/s][A100%|██████████| 1/1 [00:00<00:00,  1.56it/s]
+question: 100c6ce0a28db0672fc9a23207f72ad7decfc90c81f03baf2ecdbb30297993a3, model: deepseek-v4.1-flash-img10, score: 1, 
+ 99%|█████████▉| 127/128 [10:48<00:12, 12.74s/it]Evaluating 1...
+
+  0%|          | 0/1 [00:00<?, ?it/s][A
+100%|██████████| 1/1 [00:00<00:00,  8.84it/s][A100%|██████████| 1/1 [00:00<00:00,  7.78it/s]
+question: 73642dac6679890d1c7303e79ee6dbc93b28c3943fd8733371bcf9e73cb06948, model: deepseek-v4.1-flash-img10, score: 1, 
+100%|██████████| 128/128 [11:26<00:00, 20.30s/it]100%|██████████| 128/128 [11:26<00:00,  5.36s/it]
+Evaluating 1...
+  0%|          | 0/1 [00:00<?, ?it/s]100%|██████████| 1/1 [00:00<00:00,  3.99it/s]100%|██████████| 1/1 [00:00<00:00,  3.74it/s]
+question: 45d51d0927f37783772c554d860a9c17db83a3e8e31dd02abeb93150acdaba55, model: deepseek-v4.1-flash-img10, score: 1, 
+incremental judge: done (128 graded inline, 0 failed, 0 left to the judgment sweep)
+/home/aabduh/LiveBench/livebench/gen_ground_truth_judgment.py:115: SyntaxWarning: invalid escape sequence '\/'
+  llm_answer = re.sub(f"<think>.*?<\/think>", "", llm_answer, flags=re.DOTALL)
+/home/aabduh/LiveBench/livebench/gen_ground_truth_judgment.py:492: SyntaxWarning: invalid escape sequence '\/'
+  if_answers[m][q]['choices'][0]['turns'][0] = re.sub(f"<think>.*?<\/think>", "", if_answers[m][q]['choices'][0]['turns'][0], flags=re.DOTALL).strip()
+/home/aabduh/LiveBench/livebench/if_runner/ifbench/instructions_util.py:1554: RuntimeWarning: NLTK will not read data from '/home/aabduh/nltk_data': it is writable by, or owned by, another account, so a planted or rewritten file would be loaded as trusted data. Make it private to its owner (chmod go-w).
+  nltk.data.find("tokenizers/punkt")
+/home/aabduh/LiveBench/.venv/lib/python3.12/site-packages/nltk/data.py:1531: RuntimeWarning: NLTK will not read data from '/home/aabduh/nltk_data': it is writable by, or owned by, another account, so a planted or rewritten file would be loaded as trusted data. Make it private to its owner (chmod go-w).
+  return find(modified_name, paths)
+/home/aabduh/LiveBench/.venv/lib/python3.12/site-packages/nltk/downloader.py:1554: UserWarning: NLTK will not authorize the non-private download directory '/home/aabduh/nltk_data': it (or an ancestor) is world- or group-writable, so another local user could plant files there. Choose a private location such as ~/nltk_data.
+  for msg in self.incr_download(
+/home/aabduh/LiveBench/.venv/lib/python3.12/site-packages/nltk/downloader.py:980: UserWarning: NLTK will not authorize the non-private download directory '/home/aabduh/nltk_data': it (or an ancestor) is world- or group-writable, so another local user could plant files there. Choose a private location such as ~/nltk_data.
+  for msg in self.incr_download(info_or_id, download_dir, force, (), extract):
+[nltk_data] Downloading package punkt to /home/aabduh/nltk_data...
+[nltk_data] Refusing to install into '/home/aabduh/nltk_data': it is
+[nltk_data]     writable by, or owned by, another account, so a file
+[nltk_data]     swapped in during the install would be installed as
+[nltk_data]     trusted data. Make it private to its owner (chmod
+[nltk_data]     go-w).
+Questions from live_bench/coding/LCB_generation
+Questions from live_bench/coding/coding_completion
+Running 128 questions together across 1 benchmark(s)
+Loading model answers from 2 directories
+models: ['deepseek-v4.1-flash-img10']
+Resume mode: Reading existing judgments from data/live_bench/coding/coding_completion/model_judgment/ground_truth_judgment.jsonl
+Resume mode: Reading existing judgments from data/live_bench/coding/LCB_generation/model_judgment/ground_truth_judgment.jsonl
+Found 640 existing answer IDs
+Resume mode: Filtered out 128 already judged matches
+No question-answer pairs found to be judged
+
+Starting LiveBench evaluation
+Mode: single
+Models: DeepSeek-V4.1-Flash
+Benchmarks: live_bench/coding
+Question source: huggingface
+
+Running benchmarks together for model: DeepSeek-V4.1-Flash
+Benchmarks: live_bench/coding
+Activating virtual environment: /home/aabduh/LiveBench/.venv/bin/activate
+Running: source /home/aabduh/LiveBench/.venv/bin/activate
+
+Running benchmark command:
+export LIVEBENCH_API_KEY='dummy' && python -u gen_api_answer.py --model DeepSeek-V4.1-Flash --question-source huggingface --bench-name live_bench/coding --api-base http://localhost:15015/v1 --model-display-name DeepSeek-V4.1-Flash-img10 --max-tokens 32768 --parallel 4 --force-temperature 1.0 --livebench-release-option 2024-11-25 && python -u gen_ground_truth_judgment.py --question-source huggingface --model DeepSeek-V4.1-Flash --bench-name live_bench/coding --model-display-name DeepSeek-V4.1-Flash-img10 --livebench-release-option 2024-11-25 --resume
+Running: export LIVEBENCH_API_KEY='dummy' && python -u gen_api_answer.py --model DeepSeek-V4.1-Flash --question-source huggingface --bench-name live_bench/coding --api-base http://localhost:15015/v1 --model-display-name DeepSeek-V4.1-Flash-img10 --max-tokens 32768 --parallel 4 --force-temperature 1.0 --livebench-release-option 2024-11-25 && python -u gen_ground_truth_judgment.py --question-source huggingface --model DeepSeek-V4.1-Flash --bench-name live_bench/coding --model-display-name DeepSeek-V4.1-Flash-img10 --livebench-release-option 2024-11-25 --resume
+Benchmark completed successfully!

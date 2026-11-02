@@ -16,7 +16,7 @@ from vllm.model_executor.layers.fused_moe.b12x import B12xExperts
 from brrr import cuext
 
 import os
-PROLOGUE_MAXM = 8
+PROLOGUE_MAXM = int(os.environ.get("DS41_FUSED_PROLOGUE_MAXM", "8"))  # fused attention prologue for decode batches up to this many rows
 # TP3 A/B: DS41_FUSED_LAYERS=N fuses layers [0, N); 0 disables the fused path (control arm), 40 = all.
 LAYERS = int(os.environ.get("DS41_FUSED_LAYERS", "40"))
 DUMP = os.environ.get("DS41_FUSED_DUMP", "")

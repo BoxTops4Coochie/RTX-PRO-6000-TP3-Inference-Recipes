@@ -6,10 +6,12 @@
 
 namespace {
 
-constexpr int H = 24;  // TP3: 72 padded heads / 3
+constexpr int H = 24;     // TP3: 72 padded heads / 3 -> two m16 MMA tiles (rows 24..31 masked)
+constexpr int HT = 2;     // head tiles
 constexpr int D = 512;
-constexpr int CL = 8;
-constexpr int MAXK = 64;  // TP3: H=24 raised Smem past the sm_120 99 KB opt-in limit at MAXK=80; 64 keeps swa-only (192) decode eligible
+constexpr int MAXK = 64;  // keys per CTA (sm_120: 24 KB q + 64 KB keys fits the 99 KB opt-in limit)
+constexpr int MAXCL = 12; // CTAs per row; the combine is done by the last CTA to finish (no thread-block cluster)
+constexpr int CL = MAXCL; // exported for buffer sizing
 constexpr int WARPS = 8;
 constexpr int THREADS = WARPS * 32;
 constexpr int PS = MAXK + 8;
@@ -45,20 +47,20 @@ struct Args {
   int idx_table_width;
   int idx_width;
   int per_cta;
+  int ctas;
   const float* sink;
   float scale;
   float* partial;
   float2* stats;
+  unsigned* counters;
 };
 
 struct Smem {
-  __nv_bfloat16 q[H * D];
+  __nv_bfloat16 q[H * D];   // reused for P (32 rows x PS) after scoring
   __nv_bfloat16 k[MAXK * D];
-  float red[WARPS][H];
-  union {
-    float extra[2][H][8];
-    float w[CL][H];
-  };
+  float red[WARPS][32];
+  float w[MAXCL][H];
+  float inv[H];
   float m[H];
   float l[H];
   int slots[MAXK];
@@ -68,7 +70,9 @@ struct Smem {
   int window_req;
   int top_length;
   int idx_req;
+  int last;
 };
+static_assert(32 * PS * 2 <= H * D * 2, "P must fit in the q buffer");
 
 __device__ __forceinline__ int swz(int row, int col) { return row * D + ((((col >> 3) ^ (row & 7))) << 3) + (col & 7); }
 
@@ -82,10 +86,6 @@ __device__ __forceinline__ void ldsm_x2(uint32_t (&r)[2], const void* p) {
 
 __device__ __forceinline__ void ldsm_x4_t(uint32_t (&r)[4], const void* p) {
   asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];" : "=r"(r[0]), "=r"(r[1]), "=r"(r[2]), "=r"(r[3]) : "r"(smem_u32(p)));
-}
-
-__device__ __forceinline__ void cluster_sync() {
-  asm volatile("barrier.cluster.arrive.release.aligned;\nbarrier.cluster.wait.acquire.aligned;" ::: "memory");
 }
 
 __device__ __forceinline__ float2 half2_float2(uint32_t h) { return __half22float2(*reinterpret_cast<const __half2*>(&h)); }
@@ -186,10 +186,15 @@ __device__ __forceinline__ void decode_keys(const Args& a, Smem& sm, int first, 
   }
 }
 
+
+// Per-head reduction over the 8 warps for both head tiles. lo/hi: this lane's quad-reduced values for rows g / g+8 of tile t.
 template <class Op>
-__device__ __forceinline__ float across_warps(Smem& sm, int warp, int lane, int tid, float lo, float hi, float init, Op op) {
+__device__ __forceinline__ float heads_across_warps(Smem& sm, int warp, int lane, int tid, const float (&lo)[HT], const float (&hi)[HT], float init, Op op) {
   const int g = lane / 4;
-  if (lane % 4 == 0) sm.red[warp][g] = lo, sm.red[warp][g + 8] = hi;
+  if (lane % 4 == 0) {
+#pragma unroll
+    for (int t = 0; t < HT; ++t) sm.red[warp][t * 16 + g] = lo[t], sm.red[warp][t * 16 + g + 8] = hi[t];
+  }
   __syncthreads();
   float v = init;
   if (tid < H)
@@ -198,7 +203,7 @@ __device__ __forceinline__ float across_warps(Smem& sm, int warp, int lane, int 
   return v;
 }
 
-__global__ void __cluster_dims__(CL, 1, 1) __launch_bounds__(THREADS, 1) sparse_decode(Args a) {
+__global__ void __launch_bounds__(THREADS, 1) sparse_decode(Args a) {
   extern __shared__ __align__(128) uint8_t raw_smem[];
   Smem& sm = *reinterpret_cast<Smem*>(raw_smem);
   const int rank = blockIdx.x, row = blockIdx.y, tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
@@ -220,152 +225,161 @@ __global__ void __cluster_dims__(CL, 1, 1) __launch_bounds__(THREADS, 1) sparse_
     sm.slots[tid] = slot;
     sm.offsets[tid] = slot < 0 ? 0 : long(slot / page) * (swa ? a.swa_page_stride : a.idx_page_stride) + long(slot % page) * (swa ? SWA_BYTES : IDX_BYTES);
   }
-  reinterpret_cast<float*>(sm.extra)[tid] = 0.0f;
   __syncthreads();
   decode_keys(a, sm, first, warp, lane);
   cp_async_wait_all();
   __syncthreads();
 
-  float s[2][4] = {};
-  const auto score = [&](float (&acc)[4], int tile, int k0, int k1) {
-    float odd[4] = {};
-#pragma unroll 4
-    for (int kk = k0; kk < k1; kk += 2) {
-      uint32_t qa[4], kb[2], qb[4], kc[2];
-      ldsm_x4(qa, sm.q + swz(lane % 16, kk * 16 + (lane / 16) * 8));
-      ldsm_x2(kb, sm.k + swz(tile * 8 + lane % 8, kk * 16 + ((lane / 8) % 2) * 8));
-      ldsm_x4(qb, sm.q + swz(lane % 16, (kk + 1) * 16 + (lane / 16) * 8));
-      ldsm_x2(kc, sm.k + swz(tile * 8 + lane % 8, (kk + 1) * 16 + ((lane / 8) % 2) * 8));
-      mma_bf16(acc, qa[0], qa[1], qa[2], qa[3], kb[0], kb[1]);
-      mma_bf16(odd, qb[0], qb[1], qb[2], qb[3], kc[0], kc[1]);
+  // S = Q K^T for both head tiles; one 8-key tile per warp. Tile 1 rows >= H read a valid row (results discarded).
+  float s[HT][4] = {};
+  if (warp < tiles) {
+    float odd[HT][4] = {};
+#pragma unroll 2
+    for (int kk = 0; kk < D / 16; kk += 2) {
+      uint32_t kb[2], kc[2];
+      ldsm_x2(kb, sm.k + swz(warp * 8 + lane % 8, kk * 16 + ((lane / 8) % 2) * 8));
+      ldsm_x2(kc, sm.k + swz(warp * 8 + lane % 8, (kk + 1) * 16 + ((lane / 8) % 2) * 8));
+#pragma unroll
+      for (int t = 0; t < HT; ++t) {
+        const int qr = min(t * 16 + lane % 16, H - 1);
+        uint32_t qa[4], qb[4];
+        ldsm_x4(qa, sm.q + swz(qr, kk * 16 + (lane / 16) * 8));
+        ldsm_x4(qb, sm.q + swz(qr, (kk + 1) * 16 + (lane / 16) * 8));
+        mma_bf16(s[t], qa[0], qa[1], qa[2], qa[3], kb[0], kb[1]);
+        mma_bf16(odd[t], qb[0], qb[1], qb[2], qb[3], kc[0], kc[1]);
+      }
     }
 #pragma unroll
-    for (int i = 0; i < 4; ++i) acc[i] += odd[i];
-  };
-  if (warp < tiles) score(s[0], warp, 0, D / 16);
-  const int spill = tiles - WARPS, share = WARPS / 2, quarter = D / 16 / share;
-  const int col = 2 * (lane % 4);
-  if (spill > 0 && WARPS + warp / share < tiles) {
-    float part[4] = {};
-    const int t = warp / share;
-    score(part, WARPS + t, (warp % share) * quarter, (warp % share + 1) * quarter);
-    atomicAdd(&sm.extra[t][lane / 4][col], part[0]);
-    atomicAdd(&sm.extra[t][lane / 4][col + 1], part[1]);
-    atomicAdd(&sm.extra[t][lane / 4 + 8][col], part[2]);
-    atomicAdd(&sm.extra[t][lane / 4 + 8][col + 1], part[3]);
-  }
-  __syncthreads();
-  if (warp < spill) {
-    s[1][0] = sm.extra[warp][lane / 4][col];
-    s[1][1] = sm.extra[warp][lane / 4][col + 1];
-    s[1][2] = sm.extra[warp][lane / 4 + 8][col];
-    s[1][3] = sm.extra[warp][lane / 4 + 8][col + 1];
+    for (int t = 0; t < HT; ++t)
+#pragma unroll
+      for (int i = 0; i < 4; ++i) s[t][i] += odd[t][i];
   }
   const int g = lane / 4;
   const float scale = a.scale * LOG2E;
-  float mx0 = -INFINITY, mx1 = -INFINITY;
-#pragma unroll
-  for (int t = 0; t < 2; ++t) {
-    const int tile = warp + t * WARPS, key = tile * 8 + 2 * (lane % 4);
-    const bool live = tile < tiles && (t == 0 || warp < spill);
+  float mlo[HT], mhi[HT];
+  {
+    const int key = warp * 8 + 2 * (lane % 4);
+    const bool live = warp < tiles;
     const bool v0 = live && sm.slots[key] >= 0, v1 = live && sm.slots[key + 1] >= 0;
-    s[t][0] = v0 ? s[t][0] * scale : -INFINITY;
-    s[t][1] = v1 ? s[t][1] * scale : -INFINITY;
-    s[t][2] = v0 ? s[t][2] * scale : -INFINITY;
-    s[t][3] = v1 ? s[t][3] * scale : -INFINITY;
-    mx0 = fmaxf(mx0, fmaxf(s[t][0], s[t][1]));
-    mx1 = fmaxf(mx1, fmaxf(s[t][2], s[t][3]));
-  }
-  const float head_max = across_warps(sm, warp, lane, tid, quad_max(mx0), quad_max(mx1), -INFINITY, [](float a, float b) { return fmaxf(a, b); });
-  if (tid < H) sm.m[tid] = head_max;
-  __syncthreads();
-  __nv_bfloat16* p = sm.q;
-  const float m0 = sm.m[g], m1 = sm.m[g + 8];
-  float l0 = 0.0f, l1 = 0.0f;
 #pragma unroll
-  for (int t = 0; t < 2; ++t) {
-    const int tile = warp + t * WARPS, key = tile * 8 + 2 * (lane % 4);
-    if (tile >= tiles) break;
+    for (int t = 0; t < HT; ++t) {
+      s[t][0] = v0 ? s[t][0] * scale : -INFINITY;
+      s[t][1] = v1 ? s[t][1] * scale : -INFINITY;
+      s[t][2] = v0 ? s[t][2] * scale : -INFINITY;
+      s[t][3] = v1 ? s[t][3] * scale : -INFINITY;
+      mlo[t] = quad_max(fmaxf(s[t][0], s[t][1]));
+      mhi[t] = quad_max(fmaxf(s[t][2], s[t][3]));
+    }
+  }
+  const float head_max = heads_across_warps(sm, warp, lane, tid, mlo, mhi, -INFINITY, [](float x, float y) { return fmaxf(x, y); });
+  if (tid < H) sm.m[tid] = head_max;
+  __syncthreads();  // also: every warp is done reading q -> P may overwrite it
+  __nv_bfloat16* p = sm.q;
+  float llo[HT] = {}, lhi[HT] = {};
+  {
+    const int key = warp * 8 + 2 * (lane % 4);
     const auto e = [](float v, float m) { return v == -INFINITY ? 0.0f : exp2f(v - m); };
-    const uint32_t pb0 = pack_bf16(e(s[t][0], m0), e(s[t][1], m0)), pb1 = pack_bf16(e(s[t][2], m1), e(s[t][3], m1));
-    *reinterpret_cast<uint32_t*>(p + g * PS + key) = pb0;
-    *reinterpret_cast<uint32_t*>(p + (g + 8) * PS + key) = pb1;
-    const __nv_bfloat162 r0 = *reinterpret_cast<const __nv_bfloat162*>(&pb0), r1 = *reinterpret_cast<const __nv_bfloat162*>(&pb1);
-    l0 += __low2float(r0) + __high2float(r0);
-    l1 += __low2float(r1) + __high2float(r1);
+#pragma unroll
+    for (int t = 0; t < HT; ++t) {
+      const int h0 = t * 16 + g, h1 = h0 + 8;
+      const float m0 = h0 < H ? sm.m[h0] : 0.0f, m1 = h1 < H ? sm.m[h1] : 0.0f;
+      uint32_t pb0 = 0, pb1 = 0;
+      if (warp < tiles) {
+        pb0 = h0 < H ? pack_bf16(e(s[t][0], m0), e(s[t][1], m0)) : 0u;
+        pb1 = h1 < H ? pack_bf16(e(s[t][2], m1), e(s[t][3], m1)) : 0u;
+        *reinterpret_cast<uint32_t*>(p + h0 * PS + key) = pb0;
+        *reinterpret_cast<uint32_t*>(p + h1 * PS + key) = pb1;
+      }
+      const __nv_bfloat162 r0 = *reinterpret_cast<const __nv_bfloat162*>(&pb0), r1 = *reinterpret_cast<const __nv_bfloat162*>(&pb1);
+      llo[t] = quad_sum(__low2float(r0) + __high2float(r0));
+      lhi[t] = quad_sum(__low2float(r1) + __high2float(r1));
+    }
   }
   __syncthreads();
-  const float head_sum = across_warps(sm, warp, lane, tid, quad_sum(l0), quad_sum(l1), 0.0f, [](float a, float b) { return a + b; });
+  const float head_sum = heads_across_warps(sm, warp, lane, tid, llo, lhi, 0.0f, [](float x, float y) { return x + y; });
   if (tid < H) sm.l[tid] = head_sum;
 
-  float o[8][4] = {};
+  // O = P V for both head tiles; each warp owns 64 of the 512 value columns.
+  float o[HT][8][4] = {};
   for (int ks = 0; ks < keys / 16; ++ks) {
-    uint32_t pa[4];
-    ldsm_x4(pa, p + (lane % 16) * PS + ks * 16 + (lane / 16) * 8);
+    uint32_t pa[HT][4];
+#pragma unroll
+    for (int t = 0; t < HT; ++t) ldsm_x4(pa[t], p + (t * 16 + lane % 16) * PS + ks * 16 + (lane / 16) * 8);
 #pragma unroll
     for (int nt = 0; nt < 8; nt += 2) {
       uint32_t vb[4];
       ldsm_x4_t(vb, sm.k + swz(ks * 16 + (lane % 8) + ((lane / 8) % 2) * 8, warp * 64 + nt * 8 + (lane / 16) * 8));
-      mma_bf16(o[nt], pa[0], pa[1], pa[2], pa[3], vb[0], vb[1]);
-      mma_bf16(o[nt + 1], pa[0], pa[1], pa[2], pa[3], vb[2], vb[3]);
+#pragma unroll
+      for (int t = 0; t < HT; ++t) {
+        mma_bf16(o[t][nt], pa[t][0], pa[t][1], pa[t][2], pa[t][3], vb[0], vb[1]);
+        mma_bf16(o[t][nt + 1], pa[t][0], pa[t][1], pa[t][2], pa[t][3], vb[2], vb[3]);
+      }
     }
   }
-  float* po = a.partial + (long(row) * CL + rank) * H * D;
+  float* po = a.partial + (long(row) * MAXCL + rank) * H * D;
 #pragma unroll
-  for (int nt = 0; nt < 8; ++nt) {
-    const int d = warp * 64 + nt * 8 + 2 * (lane % 4);
-    *reinterpret_cast<float2*>(po + g * D + d) = make_float2(o[nt][0], o[nt][1]);
-    *reinterpret_cast<float2*>(po + (g + 8) * D + d) = make_float2(o[nt][2], o[nt][3]);
-  }
-  if (tid < H) a.stats[(long(row) * CL + rank) * H + tid] = make_float2(sm.m[tid], sm.l[tid]);
-  cluster_sync();
+  for (int t = 0; t < HT; ++t)
+#pragma unroll
+    for (int nt = 0; nt < 8; ++nt) {
+      const int d = warp * 64 + nt * 8 + 2 * (lane % 4), h0 = t * 16 + g, h1 = h0 + 8;
+      if (h0 < H) *reinterpret_cast<float2*>(po + h0 * D + d) = make_float2(o[t][nt][0], o[t][nt][1]);
+      if (h1 < H) *reinterpret_cast<float2*>(po + h1 * D + d) = make_float2(o[t][nt][2], o[t][nt][3]);
+    }
+  __syncthreads();
+  if (tid < H) a.stats[(long(row) * MAXCL + rank) * H + tid] = make_float2(sm.m[tid], sm.l[tid]);
 
+  // The last CTA of this row merges the per-CTA partials (split-K softmax combine with the attention sink).
+  __threadfence();
+  __syncthreads();
+  if (tid == 0) sm.last = atomicAdd(a.counters + row, 1u) == unsigned(a.ctas - 1);
+  __syncthreads();
+  if (!sm.last) return;
+  __threadfence();
   if (tid < H) {
-    float2 ml[CL];
+    float ms[MAXCL], ls[MAXCL];
+    const float sink = a.sink[tid] * LOG2E;
+    float mx = sink;
 #pragma unroll
-    for (int c = 0; c < CL; ++c) ml[c] = __ldcg(a.stats + (long(row) * CL + c) * H + tid);
-    float ms[CL], ls[CL];
-    float mx = a.sink[tid] * LOG2E;
-    const float sink = mx;
-#pragma unroll
-    for (int c = 0; c < CL; ++c) {
-      ms[c] = ml[c].x;
-      ls[c] = ml[c].y;
-      mx = fmaxf(mx, ms[c]);
+    for (int c = 0; c < MAXCL; ++c) {
+      if (c < a.ctas) {
+        const float2 ml = __ldcg(a.stats + (long(row) * MAXCL + c) * H + tid);
+        ms[c] = ml.x, ls[c] = ml.y;
+        mx = fmaxf(mx, ms[c]);
+      }
     }
     float total = mx == -INFINITY ? 0.0f : exp2f(sink - mx);
 #pragma unroll
-    for (int c = 0; c < CL; ++c) {
-      const float w = ms[c] == -INFINITY ? 0.0f : exp2f(ms[c] - mx);
+    for (int c = 0; c < MAXCL; ++c) {
+      float w = 0.0f;
+      if (c < a.ctas) {
+        w = ms[c] == -INFINITY ? 0.0f : exp2f(ms[c] - mx);
+        total += w * ls[c];
+      }
       sm.w[c][tid] = w;
-      total += w * ls[c];
     }
-    sm.red[0][tid] = total > 0.0f ? 1.0f / total : 0.0f;
+    sm.inv[tid] = total > 0.0f ? 1.0f / total : 0.0f;
   }
   __syncthreads();
-  constexpr int SLICE = D / CL / 4;
-  const int h = tid / SLICE, d4 = rank * SLICE + tid % SLICE;
-  float4 v[CL];
-#pragma unroll
-  for (int c = 0; c < CL; ++c) v[c] = __ldcg(reinterpret_cast<const float4*>(a.partial + ((long(row) * CL + c) * H + h) * D) + d4);
-  float4 acc = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-#pragma unroll
-  for (int c = 0; c < CL; ++c) {
-    const float w = sm.w[c][h];
-    acc.x += w * v[c].x, acc.y += w * v[c].y, acc.z += w * v[c].z, acc.w += w * v[c].w;
+  for (int i = tid; i < H * D / 4; i += THREADS) {
+    const int h = i / (D / 4), d4 = i % (D / 4);
+    float4 acc = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    for (int c = 0; c < a.ctas; ++c) {
+      const float w = sm.w[c][h];
+      const float4 v = __ldcg(reinterpret_cast<const float4*>(a.partial + ((long(row) * MAXCL + c) * H + h) * D) + d4);
+      acc.x += w * v.x, acc.y += w * v.y, acc.z += w * v.z, acc.w += w * v.w;
+    }
+    const float inv = sm.inv[h];
+    *reinterpret_cast<uint2*>(a.out + (long(row) * H + h) * D + d4 * 4) = make_uint2(pack_bf16(acc.x * inv, acc.y * inv), pack_bf16(acc.z * inv, acc.w * inv));
   }
-  const float inv = sm.red[0][h];
-  *reinterpret_cast<uint2*>(a.out + (long(row) * H + h) * D + d4 * 4) = make_uint2(pack_bf16(acc.x * inv, acc.y * inv), pack_bf16(acc.z * inv, acc.w * inv));
-  cluster_sync();
+  if (tid == 0) a.counters[row] = 0u;  // ready for the next launch (graph replays included)
 }
-
 }
 
 void decode(torch::Tensor q, torch::Tensor out, torch::Tensor swa_cache, int64_t swa_page, torch::Tensor positions, torch::Tensor reqs, torch::Tensor swa_table,
             torch::Tensor starts, torch::Tensor request_positions, c10::optional<torch::Tensor> replay, int64_t window, int64_t swa_width, bool draft,
             c10::optional<torch::Tensor> idx_cache, int64_t idx_page, c10::optional<torch::Tensor> idx_logical, c10::optional<torch::Tensor> visible,
             c10::optional<torch::Tensor> idx_reqs, c10::optional<torch::Tensor> idx_table, torch::Tensor sink, double sm_scale, torch::Tensor partial,
-            torch::Tensor stats) {
+            torch::Tensor stats, torch::Tensor counters) {
   const int rows = q.size(0);
   TORCH_CHECK(q.is_contiguous() && out.is_contiguous() && q.size(1) == H && q.size(2) == D && q.scalar_type() == at::kBFloat16 && sink.scalar_type() == at::kFloat);
   TORCH_CHECK(swa_table.stride(1) == 1 && positions.numel() >= rows && reqs.numel() >= rows);
@@ -400,16 +414,21 @@ void decode(torch::Tensor q, torch::Tensor out, torch::Tensor swa_cache, int64_t
     a.idx_width = idx_logical->size(1);
   }
   const int total = a.swa_width + a.idx_width;
-  TORCH_CHECK(total % (CL * 16) == 0 && total / CL <= MAXK);
-  a.per_cta = total / CL;
-  TORCH_CHECK(partial.numel() >= long(rows) * CL * H * D && stats.numel() >= long(rows) * CL * H * 2);
+  int ctas = 0;
+  for (int c = (total + MAXK - 1) / MAXK; c <= MAXCL && !ctas; ++c)
+    if (total % c == 0 && (total / c) % 16 == 0 && total / c <= MAXK) ctas = c;
+  TORCH_CHECK(ctas > 0, "sparse decode: no CTA split for ", total, " keys");
+  a.ctas = ctas;
+  a.per_cta = total / ctas;
+  TORCH_CHECK(partial.numel() >= long(rows) * MAXCL * H * D && stats.numel() >= long(rows) * MAXCL * H * 2 && counters.numel() >= rows);
+  a.counters = reinterpret_cast<unsigned*>(counters.data_ptr<int>());
   a.partial = partial.data_ptr<float>();
   a.stats = reinterpret_cast<float2*>(stats.data_ptr<float>());
   a.sink = sink.data_ptr<float>();
   a.scale = float(sm_scale);
   const c10::cuda::OptionalCUDAGuard guard(q.device());
   opt_in_smem<sparse_decode>(sizeof(Smem));
-  launch_pdl("sparse decode", sparse_decode, dim3(CL, rows), dim3(THREADS), sizeof(Smem), a);
+  launch_pdl("sparse decode", sparse_decode, dim3(ctas, rows), dim3(THREADS), sizeof(Smem), a);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -418,4 +437,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.attr("CL") = CL;
   m.attr("MAXK") = MAXK;
   m.def("decode", &decode);
+  m.def("ctas_for", [](int64_t total) { for (int c = int((total + MAXK - 1) / MAXK); c <= MAXCL; ++c) if (total % c == 0 && (total / c) % 16 == 0 && total / c <= MAXK) return c; return 0; });
 }

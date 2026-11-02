@@ -1,4 +1,4 @@
-# KV preset "2x": 2.25 GiB -> 2,185,581 tokens (2.1 x 1M). Image .9 @32k, 350 W: c1 95.7-97.1 steps/s 251-268 tok/s, c4 468-477, c8 801-818 tok/s agg, coding 398-406 / 413-419. Promotion 19/24 + 20/24.
+# KV preset "2x": 2.25 GiB -> 2,185,581 tokens (2.1 x 1M). Image .10 @32k, 350 W: c1 98.0-100.5 steps/s 229-257 tok/s, c4 481-494, c8 808-820 tok/s agg, coding 414-423 / 437-449. Promotion 19/24 + 20/24.
 # Usage: docker compose -f compose.yaml -f kv-2x.yaml up -d --force-recreate
 # (Overrides KV_CACHE_MEMORY_BYTES from .env; the VRAM comes out of expert promotion.)
 services:

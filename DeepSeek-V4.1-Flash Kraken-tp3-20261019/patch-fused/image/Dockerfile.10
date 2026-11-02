@@ -1,0 +1,13 @@
+# azallaza/ds41-kraken-tp3:20261019.10 = 20261019.9 + BRRR's sparse decode attention ported to TP3 (24 heads per GPU:
+# two m16 head tiles; up to 12 CTAs per row with a last-CTA softmax merge instead of a thread-block cluster, so the
+# 704-key compressed layers fit sm_120's 99 KB shared memory). On by default (DS41_SPARSE_DECODE=1; 0 = b12x attention).
+# attention.py also carries DS41_SPARSE_CHECK=1 (eager A/B against b12x, logs the difference). Build from the release dir:
+#   docker build -f patch-fused/image/Dockerfile.10 -t azallaza/ds41-kraken-tp3:20261019.10 .
+FROM azallaza/ds41-kraken-tp3:20261019.9
+ARG SP=/opt/venv/lib/python3.12/site-packages
+COPY patch-fused/brrr $SP/brrr
+COPY patch-fused/vllm-patched/models/deepseek_v4_1/attention.py $SP/vllm/models/deepseek_v4_1/attention.py
+ENV DS41_SPARSE_DECODE=1
+RUN rm -rf /opt/brrr-ext && mkdir -p /opt/brrr-ext && cd /tmp && MAX_JOBS=16 /opt/venv/bin/python -c "from brrr import cuext; [cuext.extension(n) for n in ('skinny','candidates','phased_all_reduce','sparse_decode','decoder')]" \
+    && find /opt/brrr-ext -name lock -delete && find $SP/brrr $SP/vllm/models/deepseek_v4_1 -name "*.pyc" -delete 2>/dev/null || true
+LABEL org.opencontainers.image.description="DS41 kraken TP3 20261019.9 + BRRR sparse decode attention at TP3 (24 heads)"
