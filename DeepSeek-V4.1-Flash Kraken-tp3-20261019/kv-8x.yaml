@@ -1,4 +1,4 @@
-# KV preset "8x": 8.75 GiB -> 8,499,917 tokens (8.1 x 1M). Image .7 @32k, 350 W: c1 74.8-75.0 steps/s 198-207 tok/s, c8 595-598 tok/s agg, coding 280 / 292-313. Promotion 14/24 + 13/24.
+# KV preset "8x": 8.75 GiB -> 8,499,917 tokens (8.1 x 1M). Image .8 @32k, 350 W: c1 79.2 steps/s 198 tok/s, c4 336, c8 587 tok/s agg, coding 278 / 297. Promotion 13/24 + 13/24.
 # Usage: docker compose -f compose.yaml -f kv-8x.yaml up -d --force-recreate
 # (Overrides KV_CACHE_MEMORY_BYTES from .env; the VRAM comes out of expert promotion.)
 services:

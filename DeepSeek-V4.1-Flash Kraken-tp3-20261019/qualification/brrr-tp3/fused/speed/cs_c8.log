@@ -1,0 +1,99 @@
+╭──────────────────────────── NVIDIA P2P Override ─────────────────────────────╮
+│ Effective: yes                                                               │
+│ Configured file: yes (/etc/modprobe.d/nvidia-p2p-override.conf)              │
+│ Runtime: ForceP2P=0x11; RMForceP2PType=1; RMPcieP2PType=2;                   │
+│ GrdmaPciTopoCheckOverride=1; EnableResizableBar=1; DmaRemapPeerMmio=1        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─────────────────────────────── Configuration ────────────────────────────────╮
+│ Completion Token Statistics Benchmark                                        │
+│ Model: Qwen3.5 @ localhost:15015                                             │
+│ Prompt: inline --prompt                                                      │
+│ Concurrency: 8                                                               │
+│ Measured runs: 40 | Max tokens: 2000                                         │
+│ Scoring: \bestonia\b                                                         │
+│ Sampling: server/model defaults (unpinned) | Watchdog: stall 600s,           │
+│ wall-clock off                                                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭────────────────────────────── Completion Stats ──────────────────────────────╮
+│ Completion Token Statistics                                                  │
+│ One optional prefix-cache scout request is used to populate prefill first.   │
+│ Built-in profile run at fixed concurrency C=8.                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Profile                                               
+╭────────────────┬───────────────────────────────────╮
+│ field          │ value                             │
+├────────────────┼───────────────────────────────────┤
+│ profile        │ custom                            │
+│ prompt         │ inline --prompt                   │
+│ prompt chars   │ 64                                │
+│ requested runs │ 40                                │
+│ concurrency    │ 8                                 │
+│ max tokens     │ 2000                              │
+│ scoring        │ regex                             │
+│ prompt sha256  │ 90d2c0d166adb894                  │
+│ prefill scout  │ 45 prompt tok / 0.20s = 224 tok/s │
+│ correct regex  │ \bestonia\b                       │
+╰────────────────┴───────────────────────────────────╯
+╭─────────────────────── Whole-run GPU Power ───────────────────────╮
+│ avg 1,035 W | max 1,069 W | limit 1,050 W | over 41s | 19 samples │
+╰───────────────────────────────────────────────────────────────────╯
+Concurrency Results                                                             
+╭─────┬────────┬────┬──────┬───────────┬──────────┬────────────┬─────────┬─────╮
+│ pa… │ done/… │ s… │ sta… │ output t… │ output … │ aggregate… │ avg re… │ se… │
+├─────┼────────┼────┼──────┼───────────┼──────────┼────────────┼─────────┼─────┤
+│   8 │  40/40 │ F… │ ✕✕✕… │       772 │    1,310 │      110.8 │     7.7 │ yes │
+╰─────┴────────┴────┴──────┴───────────┴──────────┴────────────┴─────────┴─────╯
+Selected C=8                                  
+╭────────────────────────────┬───────────────╮
+│ metric                     │         value │
+├────────────────────────────┼───────────────┤
+│ completed                  │         40/40 │
+│ score                      │       FAIL 40 │
+│ stars                      │ ✕✕✕✕✕✕✕✕✕✕ 👍 │
+│ pass rate                  │   0.0% (0/40) │
+│ hit max_tokens             │             1 │
+│ completion tokens avg      │           821 │
+│ completion tokens p50      │           772 │
+│ completion tokens p90      │         1,310 │
+│ completion tokens p99      │         1,800 │
+│ elapsed avg                │          7.7s │
+│ TTFT avg                   │         0.33s │
+│ aggregate gen tok/s        │         110.8 │
+│ mean per-request gen tok/s │         112.8 │
+╰────────────────────────────┴───────────────╯
+Failed Final Answers                                                            
+╭────┬───┬────────┬───────┬────────────────────────────────────────────────────╮
+│  # │ C │ tokens │ score │ final answer                                       │
+├────┼───┼────────┼───────┼────────────────────────────────────────────────────┤
+│  1 │ 8 │    538 │ FAIL  │                                                    │
+│  2 │ 8 │    445 │ FAIL  │                                                    │
+│  3 │ 8 │    477 │ FAIL  │                                                    │
+│  4 │ 8 │    886 │ FAIL  │ For testing primality of just one number, use a    │
+│    │   │        │       │ Miller–Rabin / trial division — the sieve is meant │
+│    │   │        │       │ for producing *all* primes up to `n                │
+│  5 │ 8 │    591 │ FAIL  │                                                    │
+│  6 │ 8 │    431 │ FAIL  │ This implementation uses a `bytearray` for         │
+│    │   │        │       │ efficient memory usage and starts marking          │
+│    │   │        │       │ multiples at `p * p`, since smaller multiples have │
+│    │   │        │       │ alre                                               │
+│  7 │ 8 │    647 │ FAIL  │                                                    │
+│  8 │ 8 │    554 │ FAIL  │                                                    │
+│  9 │ 8 │    830 │ FAIL  │ If you need primes for very large `n` (tens of     │
+│    │   │        │       │ millions+), consider a **segmented sieve** to keep │
+│    │   │        │       │ memory bounded. But for typical use cases,         │
+│ 10 │ 8 │    841 │ FAIL  │ This implementation runs in \(O(n \log \log n)\)   │
+│    │   │        │       │ time and uses \(O(n)\) memory                      │
+│ 11 │ 8 │    721 │ FAIL  │                                                    │
+│ 12 │ 8 │  1,226 │ FAIL  │                                                    │
+╰────┴───┴────────┴───────┴────────────────────────────────────────────────────╯
+Interpretation: completion-token p50/p90/p99 tells how many decode tokens the 
+model needed to reach its final answer under this engine/config. Correctness is 
+scored from the final non-empty answer line by default, matching the GLM 
+dense-MLA vs NSA benchmark methodology. The prefill scout is not a scored 
+answer; it is the max_tokens=1 prefix-cache warmup and its prompt_tokens/TTFT 
+value is reported as scout prefill speed. Concurrency Results groups completed 
+requests by parallelism; Completed Requests shows the latest individual finished
+answers.
+
+Results saved to benchmark_results.json
