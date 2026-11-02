@@ -291,6 +291,9 @@ struct Csf {
 
 struct Weights {
   Csf csf13, csf2;
+  // TP3: dense weights read in vLLM's own row-major layout (no staged copies); row strides in bytes.
+  int dense_native;
+  long woa_ld, wob_ld, gate_ld, sh13_ld, sh2_ld;
   const uint8_t* woa;
   const uint8_t* woa_s;
   const uint8_t* wob;
@@ -388,6 +391,10 @@ __device__ __forceinline__ unsigned long long evict_first_policy() {
   unsigned long long policy;
   asm volatile("createpolicy.fractional.L2::evict_first.b64 %0, 1.0;" : "=l"(policy));
   return policy;
+}
+
+__device__ __forceinline__ void cp_async8_hint(void* dst, const void* src, unsigned long long policy) {
+  asm volatile("cp.async.ca.shared.global.L2::cache_hint [%0], [%1], 8, %2;" ::"r"(smem_u32(dst)), "l"(src), "l"(policy) : "memory");
 }
 
 __device__ __forceinline__ void cp_async_arrive(unsigned long long* bar) {
@@ -1483,6 +1490,23 @@ struct Issue {
 
   __device__ __forceinline__ void frag(int f, const uint4* src) const { cp_async16_hint(stage + f * FRAG + lane * 16, src + lane, policy); }
 
+  // Same smem image as block() on a stages()-repacked matrix, gathered from the row-major original: frag f = (k32 group
+  // e = f / 4, 16-row group b = f % 4); lane (d = lane / 4, q = lane % 4) holds rows +c*8+d (c = 0, 1), bytes k0+e*32+q*8 .. +8.
+  // SH13 = gate/up interleaved in 32-row blocks (logical row r -> native (r % 64) / 32 * INTER + r / 64 * 32 + r % 32).
+  template <bool SH13 = false>
+  __device__ __forceinline__ void native(const uint8_t* w, long ld, int row0, long k0) const {
+    const int d = lane >> 2, q = lane & 3;
+#pragma unroll
+    for (int f = 0; f < FRAGS; ++f) {
+#pragma unroll
+      for (int c = 0; c < 2; ++c) {
+        int row = row0 + (f & 3) * 16 + c * 8 + d;
+        if constexpr (SH13) row = (row % 64) / 32 * INTER + row / 64 * 32 + row % 32;
+        cp_async8_hint(stage + f * FRAG + lane * 16 + c * 8, w + long(row) * ld + k0 + (f >> 2) * 32 + q * 8, policy);
+      }
+    }
+  }
+
   __device__ __forceinline__ void scales(const uint8_t* src, long ld) const {
     if (lane < 2) cp_async4(stage + SCALE_OFF + lane * 4, src + lane * ld);
   }
@@ -1514,25 +1538,34 @@ __device__ void issue(const Params& p, const Job& job, int s, const Issue& is) {
   switch (job.type) {
     case J_WOA: {
       const int kg = job.b * job.stages + s;
-      is.block(w.woa + (long(job.a) * KG_WOA + kg) * FRAGS * FRAG);
+      if (w.dense_native) is.native(w.woa, w.woa_ld, job.a * 64, long(kg) * 128);
+      else is.block(w.woa + (long(job.a) * KG_WOA + kg) * FRAGS * FRAG);
       is.scales(w.woa_s + long(job.a * 2) * (OAK / 32) + kg * 4, OAK / 32);
       return;
     }
     case J_WOB: {
       const int kg = job.b * (KS_WOB / 4) + s;
-      is.block(w.wob + (long(job.a) * KG_WOB + kg) * FRAGS * FRAG);
+      if (w.dense_native) is.native(w.wob, w.wob_ld, job.a * 64, long(kg) * 128);
+      else is.block(w.wob + (long(job.a) * KG_WOB + kg) * FRAGS * FRAG);
       is.scales(w.wob_s + long(job.a * 2) * (OA / 32) + kg * 4, OA / 32);
       return;
     }
-    case J_GATE: is.block(w.gate + (long(job.a) * KG_GATE + job.b * (KS_GATE / 4) + s) * FRAGS * FRAG); return;
+    case J_GATE: {
+      const int kg = job.b * (KS_GATE / 4) + s;
+      if (w.dense_native) is.native(w.gate, w.gate_ld, job.a * 64, long(kg) * 128);
+      else is.block(w.gate + (long(job.a) * KG_GATE + kg) * FRAGS * FRAG);
+      return;
+    }
     case J_SH1: {
       const int kg = job.b * (KS_SH1 / 4) + s;
-      is.block(w.sh13 + (long(job.a) * KG_SH1 + kg) * FRAGS * FRAG);
+      if (w.dense_native) is.native<true>(w.sh13, w.sh13_ld, job.a * 64, long(kg) * 128);
+      else is.block(w.sh13 + (long(job.a) * KG_SH1 + kg) * FRAGS * FRAG);
       is.scales(w.sh13_s + long(job.a * 2) * SLICES + kg * 4, SLICES);
       return;
     }
     case J_SH2:
-      is.block(w.sh2 + (long(job.a) * INTER_STAGES + s) * FRAGS * FRAG);
+      if (w.dense_native) is.native(w.sh2, w.sh2_ld, job.a * 64, long(s) * 128);
+      else is.block(w.sh2 + (long(job.a) * INTER_STAGES + s) * FRAGS * FRAG);
       is.scales(w.sh2_s + long(job.a * 2) * SH2_LD + s * 4, SH2_LD);
       return;
     case J_OWNA:
@@ -2164,10 +2197,24 @@ int64_t add_layer(int64_t handle, torch::Tensor woa, torch::Tensor woa_s, torch:
                   int64_t image_lo, std::optional<torch::Tensor> csf13_storage, std::optional<torch::Tensor> csf13_gdesc, std::vector<int64_t> csf13_meta,
                   std::optional<torch::Tensor> csf2_storage, std::optional<torch::Tensor> csf2_gdesc, std::vector<int64_t> csf2_meta,
                   std::optional<torch::Tensor> csf13_debug, std::optional<torch::Tensor> csf2_debug,
-                  std::optional<torch::Tensor> csf13_debug_desc = std::nullopt, std::optional<torch::Tensor> csf2_debug_desc = std::nullopt) {
+                  std::optional<torch::Tensor> csf13_debug_desc = std::nullopt, std::optional<torch::Tensor> csf2_debug_desc = std::nullopt,
+                  bool dense_native = false) {
   TORCH_CHECK(woa.numel() == long(OA) * OAK && sh2_s.size(-1) == SH2_LD);
+  auto ld_bytes = [&](const torch::Tensor& t, long rows) {
+    TORCH_CHECK(t.dim() == 2 && t.size(0) == rows && t.stride(1) == 1 && (t.stride(0) * t.element_size()) % 16 == 0 && reinterpret_cast<uintptr_t>(t.data_ptr()) % 16 == 0,
+                "native dense weight must be row-major with 16-byte aligned rows");
+    return long(t.stride(0) * t.element_size());
+  };
   for (const auto& t : {woa_s, wob_s, sh13_s, sh2_s}) TORCH_CHECK(t.scalar_type() == at::kByte, "dense scales must be e8m0 bytes");
   Layer l{};
+  l.w.dense_native = dense_native;
+  if (dense_native) {
+    l.w.woa_ld = ld_bytes(woa, OA);
+    l.w.wob_ld = ld_bytes(wob, HID);
+    l.w.gate_ld = ld_bytes(gate, EXPERTS);
+    l.w.sh13_ld = ld_bytes(sh13, 2 * INTER);
+    l.w.sh2_ld = ld_bytes(sh2, HID);
+  }
   l.w.woa = ptr<uint8_t>(woa);
   l.w.woa_s = ptr<uint8_t>(woa_s);
   l.w.wob = ptr<uint8_t>(wob);
@@ -2348,7 +2395,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("fn"), py::arg("hc_scale"), py::arg("hc_base"), py::arg("norm"), py::arg("image_lo"), py::arg("csf13_storage") = py::none(),
         py::arg("csf13_gdesc") = py::none(), py::arg("csf13_meta") = std::vector<int64_t>{}, py::arg("csf2_storage") = py::none(),
         py::arg("csf2_gdesc") = py::none(), py::arg("csf2_meta") = std::vector<int64_t>{}, py::arg("csf13_debug") = py::none(),
-        py::arg("csf2_debug") = py::none(), py::arg("csf13_debug_desc") = py::none(), py::arg("csf2_debug_desc") = py::none());
+        py::arg("csf2_debug") = py::none(), py::arg("csf13_debug_desc") = py::none(), py::arg("csf2_debug_desc") = py::none(),
+        py::arg("dense_native") = false);
   m.def("run", &run);
   m.def("prologue", &prologue);
 }

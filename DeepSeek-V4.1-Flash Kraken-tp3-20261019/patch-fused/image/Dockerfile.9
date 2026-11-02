@@ -1,0 +1,10 @@
+# azallaza/ds41-kraken-tp3:20261019.9 = 20261019.8 + the fused decoder reads vLLM's own row-major dense weights
+# (o-proj, router, shared expert) instead of keeping repacked copies: frees ~42 MiB/layer (~1.6 GiB/GPU) for expert
+# promotion. Kernel output is bit-identical to .8. DS41_FUSED_DENSE_NATIVE=0 restores the .8 copies.
+# Build from the release dir: docker build -f patch-fused/image/Dockerfile.9 -t azallaza/ds41-kraken-tp3:20261019.9 .
+FROM azallaza/ds41-kraken-tp3:20261019.8
+ARG SP=/opt/venv/lib/python3.12/site-packages
+COPY patch-fused/brrr $SP/brrr
+RUN rm -rf /opt/brrr-ext && mkdir -p /opt/brrr-ext && cd /tmp && MAX_JOBS=16 /opt/venv/bin/python -c "from brrr import cuext; [cuext.extension(n) for n in ('skinny','candidates','phased_all_reduce','sparse_decode','decoder')]" \
+    && find /opt/brrr-ext -name lock -delete && find $SP/brrr -name "*.pyc" -delete 2>/dev/null || true
+LABEL org.opencontainers.image.description="DS41 kraken TP3 20261019.8 + fused decoder on vLLM's own dense weights (+1.6 GiB/GPU for expert promotion)"

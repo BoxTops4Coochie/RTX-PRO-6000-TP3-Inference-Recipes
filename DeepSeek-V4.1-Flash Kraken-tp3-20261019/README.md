@@ -1,4 +1,4 @@
-# DeepSeek-V4.1-Flash-1017 Kraken TP3 — 20261019.8
+# DeepSeek-V4.1-Flash-1017 Kraken TP3 — 20261019.9
 
 DeepSeek-V4.1-Flash-1017 served at **tensor parallel 3 with the full 1M-token context** on three 96 GB RTX PRO 6000
 Blackwell cards, from DeepSeek's original weights (FP8 dense layers, MXFP4 routed experts; nothing requantized) or,
@@ -10,13 +10,13 @@ Weights: [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-
 [README-engram-nvfp4.md](README-engram-nvfp4.md)). Runtime: Local Inference Lab's vLLM "karmic-kraken" image
 (`karmic-kraken-beta-20261016.2`, vLLM `6d66eed35`) with FlashInfer `main` b12x and the TP3 changes in `src/`.
 
-Image: **`azallaza/ds41-kraken-tp3:20261019.8`** (`sha256:bb9908c2d6692d33c661d014012d5f713e88d8865cc7b667f1162a91a8fd8d6f`). Every tag since `20261019` shares all but a
+Image: **`azallaza/ds41-kraken-tp3:20261019.9`** (`sha256:ff9e5b6e023000df65bd47d5fe272e337c56321a739d5793f57fb283aa45ed69`). Every tag since `20261019` shares all but a
 few small layers with the previous one, so pulling over an earlier tag downloads little. Older tags stay valid:
-`.7` (no fused decoder layer), `.6` (no vocab-split sampling), `.5` (no BRRR kernels), `.4` (no cap-only adaptive verification), `.3` (stock Engram
+`.8` (fused decoder with its own dense-weight copies), `.7` (no fused decoder layer), `.6` (no vocab-split sampling), `.5` (no BRRR kernels), `.4` (no cap-only adaptive verification), `.3` (stock Engram
 tables only). The development history with per-step measurements is kept in [README-history.md](README-history.md).
 
 ```bash
-docker pull azallaza/ds41-kraken-tp3:20261019.8
+docker pull azallaza/ds41-kraken-tp3:20261019.9
 # one-time: hard-link NVIDIA's Engram shards next to the stock weights (both repos in the same HF cache)
 python3 patch-nvfp4/make_engram_nvidia_variant.py --cache "$HF_CACHE_DIR"
 HF_CACHE_DIR=/path/to/huggingface docker compose up -d      # port 15015, model name DeepSeek-V4.1-Flash
@@ -53,7 +53,7 @@ memory: the original checkpoint needs ~95 GiB per GPU before KV, caches and acti
 in host-backed CUDA virtual memory (HOST_NUMA pages behind a device address range), so startup fits. Once the server is
 healthy, `ds41-serve` arms promotion and sends a warm-up request; on that pass each parked layer remaps 16-expert chunks
 of its weights to GPU memory **at the same virtual address** (captured CUDA graphs stay valid) until 1.5 GiB per GPU
-remains free. With the default KV pool that is 18 of 24 chunks of the gate/up weights and 18 of 24 of the down weights.
+remains free. With the default KV pool that is 19 of 24 chunks of the gate/up weights and 20 of 24 of the down weights.
 
 **Hot-first expert order from real traffic.** At load, each parked layer's experts are relabeled most-routed-first
 (router rows and expert weights together, so outputs are unchanged). The order (`expert-order-blend/`) was counted on
@@ -79,8 +79,9 @@ vocabulary shard** across the three GPUs, so only a few words per step cross PCI
 **Fused decoder layer.** For decode batches (up to 128 rows) every layer runs as one persistent kernel from BRRR:
 attention output projection, both TP all-reduces over PCIe, the hyper-connection mixes, router, shared expert and the
 routed experts, with the next layer's attention prologue fused in for batches of up to 8 rows. The TP3 port reads the
-expert scales straight from FlashInfer's compressed (CSF) payload inside the kernel, so the fused layers keep CSF and
-the parking layout above: no extra VRAM, no extra launches.
+expert scales straight from FlashInfer's compressed (CSF) payload inside the kernel, and its dense weights (attention
+output, router, shared expert) straight from vLLM's own tensors, so the fused layers keep CSF and the parking layout
+above and cost no extra VRAM or launches.
 
 **Collectives.** b12x PCIe one-shot all-reduce for the small decode all-reduces; BRRR's phased PCIe all-reduce /
 all-gather (rebuilt for 3 ranks) for the 16 KB..1 MB messages that used to fall back to NCCL ring.
@@ -105,12 +106,13 @@ Everything below is built in; `compose.yaml` only mounts the launcher settings a
 | BRRR phased PCIe all-reduce (3 ranks) | 85.3 → 86.5 steps/s, coding mean 365 tok/s |
 | BRRR vocab-split draft sampling + verification (TP3 padding-aware) | 87.5 steps/s, 238 tok/s, c4 475 / c8 776 aggregate |
 | BRRR fused decoder layer on all 40 layers, in-kernel CSF scale reader (`.8`) | 87.5 → 95 steps/s; coding mean 381-388 → 393-404; c8 776 → 779-788 |
+| Fused kernel reads vLLM's dense weights instead of repacked copies (`.9`) | ~1.6 GiB/GPU back to promotion (2x: 18+18 → 19+20 chunks); c8 779-788 → 801-818, c8 +3-10% on every preset |
 | BRRR renderer fix | tool-result-only messages no longer start a new turn (reasoning kept inside agent tool loops); parallel tool results ordered by call |
 | NVFP4 expert support (`nvidia/…-NVFP4` as a drop-in) | works, 73.8 steps/s on this stack (ceiling: scale layout + W4A16); kept as an option |
 
 ## Measurements on this image
 
-All at 32K context, image `.8`, `local/…-engram-nvidia` weights, **350 W/GPU, +6000 memory offset**, with
+All at 32K context, image `.9`, `local/…-engram-nvidia` weights, **350 W/GPU, +6000 memory offset**, with
 [llm-inference-bench](https://github.com/local-inference-lab/llm-inference-bench):
 
 ```bash
@@ -125,29 +127,36 @@ python3 llm_decode_bench.py \
 
 steps/s is MTP-normalized engine steps; tok/s moves with the draft acceptance of each sampled run (temperature 1), steps/s
 is the stable number. Each KV preset is one `docker compose` overlay (below); the KV comes out of expert promotion, so
-more KV = fewer promoted experts. `2x` is two runs (ranges); `4x`/`6x`/`8x` are one run each on `.8`, with the `.7`
-two-run ranges beside them.
+more KV = fewer promoted experts. `2x` and `6x` are two runs (ranges), `4x` and `8x` one run each.
 
 | preset (`./kv.sh`, `kv-<preset>.yaml`) = x 1M-token sessions | KV / GPU | capacity (tokens) | promoted w13 / w2 | c1 steps/s | c1 tok/s | c4 aggregate tok/s | c8 steps/s | c8 aggregate tok/s | coding mean / max tok/s | prefill 32K tok/s |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
-| **2x (default)** | 2.25 GiB | 2,185,581 | 18/24 + 18/24 | **94.8-95.0** | **246-264** | 469-473 | 357.2-358.4 | **779-788** | 393-396 / 406-410 | 14,166-14,336 |
-| 4x | 4.75 GiB | 4,614,187 | 16/24 + 17/24 | 90.8 | 273 | 439 | 318.3 | 713 | 353 / 405 | 14,342 |
-| 6x | 6.5 GiB | 6,314,130 | 15/24 + 14/24 | 85.3 | 253 | 409 | 298.8 | 645 | 321 / 347 | 13,933 |
-| 8x | 8.75 GiB | 8,499,917 | 13/24 + 13/24 | 79.2 | 198 | 336 | 266.9 | 587 | 278 / 297 | 13,382 |
+| **2x (default)** | 2.25 GiB | 2,185,581 | 19/24 + 20/24 | **95.7-97.1** | **251-268** | 468-477 | 366.2-374.7 | **801-818** | 398-406 / 413-419 | 14,702-15,148 |
+| 4x | 4.75 GiB | 4,614,187 | 17/24 + 18/24 | 91.3 | 235 | 453 | 344.9 | 771 | 366 / 398 | 14,677 |
+| 6x | 6.5 GiB | 6,314,130 | 16/24 + 16/24 | 86.2-86.8 | 230-232 | 403-423 | 310.8-316.4 | 690-705 | 337-339 / 350-363 | 14,023-14,435 |
+| 8x | 8.75 GiB | 8,499,917 | 14/24 + 14/24 | 79.1 | 207 | 369 | 284.6 | 622 | 310 / 323 | 13,523 |
 
-Against `.7` on the same presets (350 W, `.7` two-run ranges): c1 steps/s +8% (2x: 87.4-87.9), +6-7% (4x: 84.4-85.8),
-+5-6% (6x: 80.4-81.2), +6% (8x: 74.8-75.0). c8 is level at 2x (771-782) and 4x (713-742), and a little lower at 6x
-(693-704) and 8x (595-598): the fused engine keeps its own copies of the dense weights (~220 MB per GPU), which costs
-one promoted expert chunk per region, and big batches lean on the experts more than on launch overhead. Coding mean
-rises at 2x (381-388 on `.7`). `DS41_FUSED_LAYERS=0` restores the `.7` path on this image if a preset needs the chunk back.
+Against earlier tags on the same presets (350 W):
+
+| preset | c1 steps/s `.7` / `.8` / `.9` | c8 tok/s `.7` / `.8` / `.9` | coding mean `.7` / `.8` / `.9` |
+| --- | --- | --- | --- |
+| 2x | 87.4-87.9 / 94.8-95.0 / 95.7-97.1 | 771-782 / 779-788 / 801-818 | 381-388 / 393-396 / 398-406 |
+| 4x | 84.4-85.8 / 90.8 / 91.3 | 713-742 / 713 / 771 | 339-342 / 353 / 366 |
+| 6x | 80.4-81.2 / 85.3 / 86.2-86.8 | 693-704 / 645 / 690-705 | 316-328 / 321 / 337-339 |
+| 8x | 74.8-75.0 / 79.2 / 79.1 | 595-598 / 587 / 622 | 280 / 278 / 310 |
+
+`.8` kept its own repacked copy of every layer's dense weights (~42 MiB/layer, ~1.6 GiB/GPU), which cost expert promotion
+and showed at high concurrency (6x c8 645); `.9` reads vLLM's tensors directly (bit-identical output, ~5% slower per
+fused layer in isolation, more than repaid by the promoted experts). `DS41_FUSED_DENSE_NATIVE=0` restores the `.8`
+copies; `DS41_FUSED_LAYERS=0` the `.7` path.
 
 Coding peak at higher concurrency: `--coding-peak` runs sequential cc1 only. The same prompt through
 `--completion-stats --prompt "Write a Python script that implements the Sieve of Eratosthenes." --profile-concurrency 8
---profile-runs 40 --max-tokens 2000` gives 112.8 tok/s per request, ~800 tok/s aggregate on `.8` 2x (at cc1 the same
+--profile-runs 40 --max-tokens 2000` gave 112.8 tok/s per request, ~800 tok/s aggregate on `.8` 2x (at cc1 the same
 command reads 394.9 vs coding peak's mean 404.1).
 
-Reading the presets: `6x` still promotes ~240 of 384 experts per parked layer, the set that carries most routes;
-`8x` cuts into it (~208), so its cost per added 1M tokens is the steepest. Use `8x` when eight concurrent 1M-token
+Reading the presets: `6x` still promotes ~256 of 384 experts per parked layer, the set that carries most routes;
+`8x` cuts into it (~224), so its cost per added 1M tokens is the steepest. Use `8x` when eight concurrent 1M-token
 sessions are really needed; spare KV beyond the running sessions only feeds prefix caching.
 
 ## Quality and stress
@@ -155,11 +164,11 @@ sessions are really needed; spare KV beyond the running sessions only feeds pref
 Correctness set run on each shipped change (same protocol as the GLM Kraken TP3 releases: thinking on,
 `reasoning_effort` max, temperature 1 unless noted):
 
-| Test | Result on `.8` (fused decoder) | Earlier tags |
+| Test | Result on `.9` / `.8` (fused decoder) | Earlier tags |
 | --- | --- | --- |
-| 43 verifiable-answer questions, thinking off, temperature 0 (`compare_models.py`) | **43/43** | 41/43 (`.7`), 42/43 (`.4`-`.6`), 41-42 stock |
-| LiveBench coding (release 2024-11-25, 32K budget) | **83.2** (LCB 74.4 / completion 92.0) | 83.2 (`.7`), 84.2 (`.6`), 81.9 (`.4`/`.5`), 81.3 stock Engram |
-| hotel-lights, 30 runs at 4 concurrent, seed 103 | **30 exact** / 0 wrong / 0 truncated (mean 21,636 tokens) | 30/30 on every tag (`.7` mean 21,125) |
+| 43 verifiable-answer questions, thinking off, temperature 0 (`compare_models.py`) | **42/43** `.9` (bat-and-ball, also missed by `.7`) / 43/43 `.8` | 41/43 (`.7`), 42/43 (`.4`-`.6`), 41-42 stock |
+| LiveBench coding (release 2024-11-25, 32K budget) | **83.2** on `.8` (LCB 74.4 / completion 92.0; `.9` kernel output is bit-identical) | 83.2 (`.7`), 84.2 (`.6`), 81.9 (`.4`/`.5`), 81.3 stock Engram |
+| hotel-lights, 30 runs at 4 concurrent, seed 103 | **30 exact** / 0 wrong / 0 truncated on `.8` (mean 21,636 tokens) | 30/30 on every tag (`.7` mean 21,125) |
 | lavd, 30 runs at 4 concurrent | — | 30 exact (`.3`) |
 | Retrieval of three markers at 128K / 900K | — | pass / pass (`.3`) |
 | Long generation after a 581K-token conversation, 4 seeds | — | 4/4 clean, worst 8-gram repeat 0.0005 (`.3`) |
@@ -172,12 +181,14 @@ mapping-failure / preemption / cuBLAS lines.
 
 | Stress | Result |
 | --- | --- |
-| `.8` (fused decoder), 2x pool, c8 | **PASS**: 16/16 long, 231/231 pings, 9.56M prompt tokens, min free VRAM 511 MiB, 0 bad log lines (36 min) |
+| `.9` (fused, vLLM dense weights), 2x pool, c8 | **PASS**: 16/16 long, 135/135 pings, 9.56M prompt tokens, min free VRAM 521 MiB, 0 bad log lines (27 min) |
+| `.8` (fused decoder), 2x pool, c8 | PASS: 16/16 long, 231/231 pings, 9.56M prompt tokens, min free VRAM 511 MiB, 0 bad log lines (36 min) |
 | `.7` (vocab-split), 2x pool, c8 | PASS: 16/16 long, 262/262 pings, 9.56M prompt tokens, min free VRAM 494 MiB, 0 bad log lines (39 min) |
 | `.6` (BRRR kernels), 2x pool, c8 | PASS: 16/16 long, 136/136 pings, 9.56M prompt tokens, min free 543 MiB |
 | `.5` (cap-only adaptive), 2x pool, c8 | PASS: 16/16, 127/127, 9.56M tokens, min free 593 MiB |
 | `.4`, 2x / 4x / 6x / 8x pools, c4 | all PASS (min free 517-537 MiB; the 1.5 GiB reserve, not the KV size, governs stability) |
 | 3-rank phased all-reduce extension (`patch-brrr/test_phased.py`) | 132 collectives bit/tolerance-equal to torch references |
+| Fused layer replay, vLLM dense weights vs `.8` copies (`patch-fused/replay_native.py`) | bit-identical outputs; memcheck 0 errors |
 | Fused layer replay (`patch-fused/replay_csf.py`, real dumped inputs) | in-kernel CSF vs decoded scales equal within float-atomic noise (rel 7e-7); compute-sanitizer memcheck 0 errors |
 
 Results and logs: `qualification/`.
@@ -197,7 +208,7 @@ cost-model adaptive (trims a lone user to ~2 drafts: c1 -11%). `adaptive-verific
 every draft verified at any concurrency (c8 611 instead of 752).
 
 **Fused decoder**: `DS41_FUSED_LAYERS=40` (default) fuses every layer; `N` fuses layers 0..N-1; `0` = the `.7` path
-(no fused engine is built, the one promoted chunk per region comes back).
+(no fused engine is built). `DS41_FUSED_DENSE_NATIVE=1` (default) reads vLLM's dense weights; `0` = `.8`'s copies.
 
 **BRRR pieces**: `VLLM_DSPARK_SHARD_MARKOV_HEAD=0 VLLM_DSPARK_REPLICATE_MARKOV_W1=0` turns the vocab-split sampler off
 (= `.6`); `BRRR_TP3_LOG=1` logs once per worker which kernels engaged.
@@ -253,12 +264,13 @@ requests (the configured limit), the stock (FP8) Engram tables on the BRRR tags 
   `patch-brrr/` (`.6`/`.7`: the BRRR port — `brrr/` package incl. kernels, `brrr.pth` hook, `vllm-patched/`,
   `stage1.patch`, `test_phased.py`, `image/Dockerfile`, `LICENSE-brrr`, `NOTICE-brrr`), `patch-fused/` (`.8`: the
   updated `brrr/` package with the TP3 fused decoder `kernels/decoder.cu` + `decoder.py`, `vllm-patched/` `nvidia/model.py`
-  and `b12x.py`, `replay.py`/`replay_csf.py` offline replay harnesses, `image/Dockerfile`, license files).
+  and `b12x.py`, `replay.py`/`replay_csf.py`/`replay_native.py` offline replay harnesses, `image/Dockerfile` (`.8`) and
+  `image/Dockerfile.9`, license files).
 - `compose.yaml`, `.env.example`, `kv.sh` + `kv-2x/4x/6x/8x.yaml`, `k7.yaml` + `ds41-launch-k7.yaml`,
   `expert-order-blend/` (the shipped order), `expert-order/` (the image's baked order), `compose.nvfp4.yaml` (dev overlay).
 - `qualification/`: `run_qualification.py` and the GLM-derived checks, `vision/`, `coding-task/`, `kv-presets-stress/`
   (harness + per-preset results), `engram-nvidia/` (hotel-lights + eval on `.4`), `brrr-tp3/` (stress, eval, LiveBench
-  answers, hotel-lights on `.6`/`.7`; `fused/` for `.8`: eval, LiveBench, hotel-lights, stress, speed and preset logs), `RESULTS.md`.
+  answers, hotel-lights on `.6`/`.7`; `fused/` for `.8`: eval, LiveBench, hotel-lights, stress, speed and preset logs; `fused9/` for `.9`: eval, stress, preset logs), `RESULTS.md`.
 - `bench/`, `bench-20261019.3/`: the early prefill/needle/decode measurements and their scripts.
 - `README-history.md`: the previous README with every update section; `README-tuning.md`: expert-order procedure.
 
@@ -273,6 +285,7 @@ requests (the configured limit), the stock (FP8) Engram tables on the BRRR tags 
 | `DS41_VERIFY_ROW_CAP` | `24` | cap-only adaptive verification row ceiling; `0` = upstream cost-model adaptive |
 | `VLLM_DSPARK_SHARD_MARKOV_HEAD` / `VLLM_DSPARK_REPLICATE_MARKOV_W1` | `1` / `1` | TP-sharded DSpark markov head for the vocab-split sampler; `0`/`0` = stock head, split sampler off (= `.6`) |
 | `DS41_FUSED_LAYERS` | `40` | layers run by the fused decoder kernel; `0` = `.7` path |
+| `DS41_FUSED_DENSE_NATIVE` | `1` | fused kernel reads vLLM's dense weights; `0` = per-layer copies (`.8`) |
 | `BRRR_TP3_LOG` | `0` | `1` = log once per worker which BRRR kernels engaged |
 | `B12X_EXPERT_ORDER_DIR` | `/opt/ds41/expert-order-blend` | expert promotion order; `/opt/ds41/expert-order` = baked order |
 | `B12X_EXPERT_ROUTES_ALL` | `0` | `1` = dump route counts every 30 s to build your own order (~0.5-1% while on) |
@@ -281,13 +294,13 @@ requests (the configured limit), the stock (FP8) Engram tables on the BRRR tags 
 | `ENGRAM_ROW_CACHE_ROWS` | `8388608` | host row cache for disk Engram tables; `0` = off |
 | `DRAFT_NVFP4_HEAD` | `1` | DSpark drafter vocabulary head in NVFP4; `0` = BF16 |
 | `DS41_LAUNCH_SETTINGS` | `/etc/ds41/launch.yaml` | lil launcher settings file (`k7.yaml` points it at `ds41-launch-k7.yaml`) |
-| `DS41_IMAGE` | `azallaza/ds41-kraken-tp3:20261019.8` | image tag (`.7`, `.6`, `.5`, `.4`, `.3` remain valid) |
+| `DS41_IMAGE` | `azallaza/ds41-kraken-tp3:20261019.9` | image tag (`.8`, `.7`, `.6`, `.5`, `.4`, `.3` remain valid) |
 | `HOST_PORT`, `GPU0`/`GPU1`/`GPU2` | `15015`, `0`/`1`/`2` | API port, GPU indices |
 
 ## compose.yaml
 
 ```yaml
-# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.8
+# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.9
 # (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/,
 #  + the 2026-10-31 MXFP4-Engram / NVFP4-expert patches in patch-nvfp4/, inert for stock weights).
 # Defaults: original deepseek-ai weights (MXFP4 experts, lossless), DSpark 5 drafts with
@@ -300,7 +313,7 @@ requests (the configured limit), the stock (FP8) Engram tables on the BRRR tags 
 # and ~256 GB host RAM. Tested at 450 W/GPU (350 W works; power only affects prefill).
 services:
   ds41-kraken-tp3:
-    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.8}"
+    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.9}"
     container_name: ds41-kraken-tp3
     # unless-stopped: auto-start on host reboot / daemon restart, but respect a manual `stop`.
     restart: "unless-stopped"

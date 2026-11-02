@@ -1,0 +1,4 @@
+[img9-c8] capacity=2,185,581 tok -> 2 waves x 8 x ~530,000 tok unique prompts (+ pinger)
+  wave 1/2: 8/8 ok, 4,779,876 prompt tok, 820s, minfree so far 521 MiB
+  wave 2/2: 8/8 ok, 4,780,121 prompt tok, 818s, minfree so far 521 MiB
+[img9-c8] PASS: 16/16 long requests ok, pinger 135/135 ok, 9,559,997 prompt tok pushed, min free VRAM 521 MiB (807 samples), health=200, bad log lines=0, wall 27.4 min

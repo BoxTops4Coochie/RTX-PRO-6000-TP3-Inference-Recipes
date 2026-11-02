@@ -23,6 +23,7 @@ DUMP = os.environ.get("DS41_FUSED_DUMP", "")
 DUMP_LAYERS = {int(x) for x in os.environ.get("DS41_FUSED_DUMP_LAYERS", "").split(",") if x.strip()}  # empty = all
 # TP3 A/B: fuse only decode batches of at most DS41_FUSED_MAXM rows (fused c8 measured below native b12x); 0 = MAXM.
 FUSED_MAXM = int(os.environ.get("DS41_FUSED_MAXM", "0"))
+DENSE_NATIVE = os.environ.get("DS41_FUSED_DENSE_NATIVE", "1") == "1"  # kernel reads vLLM dense weights, no staged copies
 CSF_INKERNEL = os.environ.get("DS41_FUSED_CSF", "1") == "1"  # read b12x CSF scale payloads inside the fused kernel
 CSF_DEBUG_LAYER = int(os.environ.get("DS41_FUSED_CSF_DEBUG_LAYER", "-1"))  # mirror this layer's expanded scale words and verify them at runtime
 
@@ -215,16 +216,16 @@ class Engine:
         kwargs = dict(
             # TP3 port: per-rank o-proj shard = ext.OA rows (3 padded groups x 1024); the last rank's shard runs past
             # the checkpoint's 8 real groups and is zero-filled (raw_padded), matching kraken's padded wo_b module weight.
-            woa=stages(self.raw_padded(f"{prefix}.attn.wo_a.weight", shard(r, self.ext.OA))),
+            woa=layer.attn.wo_a.weight if DENSE_NATIVE else stages(self.raw_padded(f"{prefix}.attn.wo_a.weight", shard(r, self.ext.OA))),
             woa_s=self.raw_padded(f"{prefix}.attn.wo_a.scale", shard(r, self.ext.OA // 32)),
-            wob=stages(layer.attn.wo_b.weight),
+            wob=layer.attn.wo_b.weight if DENSE_NATIVE else stages(layer.attn.wo_b.weight),
             wob_s=self.raw_padded(f"{prefix}.attn.wo_b.scale", cols=shard(r, self.ext.OA // 32)),
-            gate=stages(ffn.gate.weight),
+            gate=ffn.gate.weight if DENSE_NATIVE else stages(ffn.gate.weight),
             gate_b=ffn.gate.e_score_correction_bias.float().contiguous(),
             bias_vl=None if bias_vl is None else bias_vl.float().contiguous(),
-            sh13=stages(interleave(shared.gate_up_proj.weight, 32)),
+            sh13=shared.gate_up_proj.weight if DENSE_NATIVE else stages(interleave(shared.gate_up_proj.weight, 32)),
             sh13_s=interleave(torch.cat(scales), 1),
-            sh2=stages(shared.down_proj.weight),
+            sh2=shared.down_proj.weight if DENSE_NATIVE else stages(shared.down_proj.weight),
             sh2_s=torch.nn.functional.pad(self.raw(f"{prefix}.ffn.shared_experts.w2.scale", cols=inter_blocks), (0, self.ext.SH2_LD - inter // 32)).contiguous(),
             w13=rep.w13_rp.contiguous(),
             s13=(decoded[0] if decoded is not None else rep.w13_sfb.contiguous()),
@@ -235,8 +236,29 @@ class Engine:
             hc_base=layer.hc_ffn_base.float().contiguous(),
             norm=layer.ffn_norm.weight.contiguous(),
             image_lo=int(getattr(ffn, "image_sentinel_lo", 0) or 0),
+            dense_native=DENSE_NATIVE,
             **csf,
         )
+        if os.environ.get("DS41_FUSED_NATIVE_PROBE") == "1" and index in (0, 20, 39) and not DENSE_NATIVE:
+            # TP3: can the kernel read vLLM's own dense weights instead of staged copies?
+            wa = getattr(layer.attn.wo_a, "weight", None)
+            cand = {"woa": wa, "wob": layer.attn.wo_b.weight, "gate": ffn.gate.weight,
+                    "sh13": shared.gate_up_proj.weight, "sh2": shared.down_proj.weight}
+            tot = 0
+            for k, t in cand.items():
+                staged = kwargs[k]; tot += staged.numel()
+                if t is None:
+                    print(f"[brrr-tp3] native probe L{index} {k}: no module weight", flush=True); continue
+                mapped = interleave(t, 32) if k == "sh13" else t
+                try:
+                    eq = torch.equal(stages(mapped), staged)
+                except Exception as ex:
+                    eq = f"err {ex}"
+                print(f"[brrr-tp3] native probe L{index} {k}: shape={tuple(t.shape)} stride={tuple(t.stride())} dtype={t.dtype} contig={t.is_contiguous()} "
+                      f"ptr%256={t.data_ptr() % 256} stages(native)==staged: {eq}", flush=True)
+            print(f"[brrr-tp3] native probe L{index}: staged dense bytes/layer = {tot / 2**20:.1f} MiB", flush=True)
+            if DUMP:
+                torch.save({k: (v.detach().cpu() if v is not None else None) for k, v in cand.items()}, f"{DUMP}/native{index}_rank{r}.pt")
         if DUMP and (not DUMP_LAYERS or index in DUMP_LAYERS):  # TP3 debug: offline replay (harness/replay.py)
             self.dump_csf(owner, rep, index)
             torch.save({k: (v.cpu() if isinstance(v, torch.Tensor) else v) for k, v in kwargs.items()}, f"{DUMP}/layer{index}_rank{r}.pt")

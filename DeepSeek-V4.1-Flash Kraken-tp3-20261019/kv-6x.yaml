@@ -1,4 +1,4 @@
-# KV preset "6x": 6.5 GiB -> 6,314,130 tokens (6.0 x 1M). Image .8 @32k, 350 W: c1 85.3 steps/s 253 tok/s, c4 409, c8 645 tok/s agg, coding 321 / 347. Promotion 15/24 + 14/24.
+# KV preset "6x": 6.5 GiB -> 6,314,130 tokens (6.0 x 1M). Image .9 @32k, 350 W: c1 86.2-86.8 steps/s 230-232 tok/s, c4 403-423, c8 690-705 tok/s agg, coding 337-339 / 350-363. Promotion 16/24 + 16/24.
 # Usage: docker compose -f compose.yaml -f kv-6x.yaml up -d --force-recreate
 # (Overrides KV_CACHE_MEMORY_BYTES from .env; the VRAM comes out of expert promotion.)
 services:
