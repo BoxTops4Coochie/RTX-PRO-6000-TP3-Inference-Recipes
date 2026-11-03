@@ -1,0 +1,13 @@
+# azallaza/ds41-kraken-tp3:20261019.11 = 20261019.10 + long-context fix + small extras:
+#  - BRRR's sorted top-512 radix select for the indexer is off by default (BRRR_RADIX_TOPK=blocks): it cost 6% decode
+#    at 128K and 15% at 512K (reported on 3x Max-Q real agent traffic, confirmed here). 1 = .10 behaviour, 0 = stock b12x.
+#  - Load-scaled DSpark row cap (DS41_VERIFY_ROW_CAP_HIGH, default 0 = off): only acts above 8 decoding requests.
+# Build from the release dir: docker build -f patch-fused/image/Dockerfile.11 -t azallaza/ds41-kraken-tp3:20261019.11 .
+FROM azallaza/ds41-kraken-tp3:20261019.10
+ARG SP=/opt/venv/lib/python3.12/site-packages
+COPY patch-fused/brrr $SP/brrr
+COPY patch-fused/vllm-patched/v1/worker/gpu/spec_decode/adaptive_verification.py $SP/vllm/v1/worker/gpu/spec_decode/adaptive_verification.py
+ENV BRRR_RADIX_TOPK=blocks
+RUN rm -rf /opt/brrr-ext && mkdir -p /opt/brrr-ext && cd /tmp && MAX_JOBS=16 /opt/venv/bin/python -c "from brrr import cuext; [cuext.extension(n) for n in ('skinny','candidates','phased_all_reduce','sparse_decode','decoder')]" \
+    && find /opt/brrr-ext -name lock -delete && find $SP/brrr $SP/vllm/v1/worker/gpu/spec_decode -name "*.pyc" -delete 2>/dev/null || true
+LABEL org.opencontainers.image.description="DS41 kraken TP3 20261019.10 + long-context indexer top-k fix (BRRR sorted radix off) + load-scaled row cap option"

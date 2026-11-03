@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 
 from collections.abc import Callable
 from types import ModuleType
@@ -239,6 +240,11 @@ def patch_linear(module: ModuleType) -> None:
 def patch_indexer(module: ModuleType) -> None:
     from brrr import candidates
 
+    # TP3: BRRR_RADIX_TOPK = blocks (default: 2048-block radix pick only) | 0 (stock b12x indexer top-k) | sorted | 1 (both)
+    mode = os.environ.get("BRRR_RADIX_TOPK", "blocks")  # default: sorted top-512 path off (it costs 6-15% decode beyond 128K)
+    if mode == "0":
+        return
+    candidates.MODE = mode
     module.run_row_topk = candidates.row_topk(module.run_row_topk)
     module._launch = candidates.sorted_launch(module._launch)
 

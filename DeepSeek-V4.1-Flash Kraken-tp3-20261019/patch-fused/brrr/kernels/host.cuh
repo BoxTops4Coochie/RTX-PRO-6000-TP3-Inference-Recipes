@@ -1,5 +1,5 @@
-#include <cstdlib>
 #pragma once
+#include <cstdlib>
 
 #include <c10/cuda/CUDAStream.h>
 #include <torch/extension.h>

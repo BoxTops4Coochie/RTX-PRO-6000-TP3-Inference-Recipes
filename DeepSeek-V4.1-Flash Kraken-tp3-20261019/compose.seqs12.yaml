@@ -1,0 +1,13 @@
+# Opt-in overlay: 12 concurrent sequences (CUDA graphs up to 72 rows) + load-scaled DSpark row cap (24 rows up to
+# 8 decoding requests, 32 above). Measured on .10/.11 at 32K: c12 ~973, c16 ~1,097 tok/s aggregate (vs ~810 at the
+# 8-sequence limit), c1-c8 unchanged, no promotion cost. NOT safe for many long prompts at once: 16 x 265K unique
+# prompts against the 2x pool livelocked the scheduler (partly prefilled requests hold the pool). Short contexts only.
+#   docker compose -f compose.yaml -f compose.seqs12.yaml up -d --force-recreate
+services:
+  ds41-kraken-tp3:
+    environment:
+      DS41_LAUNCH_SETTINGS: /etc/ds41/launch-seqs12.yaml
+      DS41_VERIFY_ROW_CAP_HIGH: "${DS41_VERIFY_ROW_CAP_HIGH:-32}"
+      DS41_VERIFY_ROW_CAP_REQS: "${DS41_VERIFY_ROW_CAP_REQS:-8}"
+    volumes:
+      - ./ds41-launch-seqs12.yaml:/etc/ds41/launch-seqs12.yaml:ro

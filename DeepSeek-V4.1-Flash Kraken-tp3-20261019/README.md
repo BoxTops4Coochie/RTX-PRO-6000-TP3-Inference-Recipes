@@ -1,4 +1,4 @@
-# DeepSeek-V4.1-Flash-1017 Kraken TP3 — 20261019.10
+# DeepSeek-V4.1-Flash-1017 Kraken TP3 — 20261019.11
 
 DeepSeek-V4.1-Flash-1017 served at **tensor parallel 3 with the full 1M-token context** on three 96 GB RTX PRO 6000
 Blackwell cards, from DeepSeek's original weights (FP8 dense layers, MXFP4 routed experts; nothing requantized) or,
@@ -10,13 +10,13 @@ Weights: [deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-
 [README-engram-nvfp4.md](README-engram-nvfp4.md)). Runtime: Local Inference Lab's vLLM "karmic-kraken" image
 (`karmic-kraken-beta-20261016.2`, vLLM `6d66eed35`) with FlashInfer `main` b12x and the TP3 changes in `src/`.
 
-Image: **`azallaza/ds41-kraken-tp3:20261019.10`** (`sha256:b959cb61c6914ce99a4c993dec007fa4d021b5e10d091ac4484e839b1e5ab5c7`). Every tag since `20261019` shares all but a
+Image: **`azallaza/ds41-kraken-tp3:20261019.11`** (`sha256:c0d61091b15323e285c0114153f3664af966d2fbfb68a2b99ad658887635d0bb`). Every tag since `20261019` shares all but a
 few small layers with the previous one, so pulling over an earlier tag downloads little. Older tags stay valid:
-`.9` (b12x attention, no BRRR sparse decode), `.8` (fused decoder with its own dense-weight copies), `.7` (no fused decoder layer), `.6` (no vocab-split sampling), `.5` (no BRRR kernels), `.4` (no cap-only adaptive verification), `.3` (stock Engram
+`.10` (BRRR's sorted indexer top-k on: 6-15% slower decode beyond 128K), `.9` (b12x attention, no BRRR sparse decode), `.8` (fused decoder with its own dense-weight copies), `.7` (no fused decoder layer), `.6` (no vocab-split sampling), `.5` (no BRRR kernels), `.4` (no cap-only adaptive verification), `.3` (stock Engram
 tables only). The development history with per-step measurements is kept in [README-history.md](README-history.md).
 
 ```bash
-docker pull azallaza/ds41-kraken-tp3:20261019.10
+docker pull azallaza/ds41-kraken-tp3:20261019.11
 # one-time: hard-link NVIDIA's Engram shards next to the stock weights (both repos in the same HF cache)
 python3 patch-nvfp4/make_engram_nvidia_variant.py --cache "$HF_CACHE_DIR"
 HF_CACHE_DIR=/path/to/huggingface docker compose up -d      # port 15015, model name DeepSeek-V4.1-Flash
@@ -112,6 +112,7 @@ Everything below is built in; `compose.yaml` only mounts the launcher settings a
 | BRRR phased PCIe all-reduce (3 ranks) | 85.3 → 86.5 steps/s, coding mean 365 tok/s |
 | BRRR vocab-split draft sampling + verification (TP3 padding-aware) | 87.5 steps/s, 238 tok/s, c4 475 / c8 776 aggregate |
 | BRRR fused decoder layer on all 40 layers, in-kernel CSF scale reader (`.8`) | 87.5 → 95 steps/s; coding mean 381-388 → 393-404; c8 776 → 779-788 |
+| BRRR's sorted top-512 radix select for the indexer turned off (`.11`, `BRRR_RADIX_TOPK=blocks`) | c1 at 128K 90.9 → 95.6-96.8 steps/s, at 512K 77.4 → 89.6-90.6 (+6% / +15%); 32K unchanged |
 | BRRR sparse decode attention at 24 heads (`.10`) | c1 95.7-97.1 → 98.0-100.5 steps/s (+3-4% on every preset); c8 level |
 | Fused kernel reads vLLM's dense weights instead of repacked copies (`.9`) | ~1.6 GiB/GPU back to promotion (2x: 18+18 → 19+20 chunks); c8 779-788 → 801-818, c8 +3-10% on every preset |
 | BRRR renderer fix | tool-result-only messages no longer start a new turn (reasoning kept inside agent tool loops); parallel tool results ordered by call |
@@ -119,7 +120,7 @@ Everything below is built in; `compose.yaml` only mounts the launcher settings a
 
 ## Measurements on this image
 
-All at 32K context, image `.10`, `local/…-engram-nvidia` weights, **350 W/GPU, +6000 memory offset**, with
+All at 32K context unless noted, image `.11` (2x) and `.10` (4x/6x/8x; same code at 32K), `local/…-engram-nvidia` weights, **350 W/GPU, +6000 memory offset**, with
 [llm-inference-bench](https://github.com/local-inference-lab/llm-inference-bench):
 
 ```bash
@@ -138,10 +139,20 @@ more KV = fewer promoted experts. `2x` is two runs (ranges), `4x`/`6x`/`8x` one 
 
 | preset (`./kv.sh`, `kv-<preset>.yaml`) = x 1M-token sessions | KV / GPU | capacity (tokens) | promoted w13 / w2 | c1 steps/s | c1 tok/s | c4 aggregate tok/s | c8 steps/s | c8 aggregate tok/s | coding mean / max tok/s | prefill 32K tok/s |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
-| **2x (default)** | 2.25 GiB | 2,185,581 | 19/24 + 20/24 | **98.0-100.5** | **229-257** | 481-494 | 360.6-370.2 | **808-820** | 414-423 / 437-449 | 14,455-14,986 |
+| **2x (default)** | 2.25 GiB | 2,185,581 | 19/24 + 20/24 | **97.1-100.5** | **229-265** | 467-494 | 360.2-370.2 | **808-820** | 414-425 / 437-461 | 14,455-14,986 |
 | 4x | 4.75 GiB | 4,614,187 | 17/24 + 18/24 | 93.8 | 254 | 460 | 344.2 | 751 | 365 / 380 | 14,437 |
 | 6x | 6.5 GiB | 6,314,130 | 16/24 + 16/24 | 88.7 | 261 | 414 | 317.0 | 708 | 346 / 366 | 14,084 |
 | 8x | 8.75 GiB | 8,499,917 | 14/24 + 15/24 | 82.5 | 232 | 378 | 289.9 | 632 | 312 / 339 | 13,631 |
+
+Long context, 2x, `.11` (aggregate tok/s; c1 also steps/s). These rows exposed the regression `.11` fixes: with BRRR's
+sorted indexer top-k on (`.6`-`.10`), c1 lost 6% at 128K and 15% at 512K.
+
+| context | c1 tok/s (steps/s) | c4 | c8 |
+| --- | ---: | ---: | ---: |
+| 32K | 252-265 (97.1-99.7) | 467-492 | 812-814 |
+| 128K | 273 (95.6-96.8) | 468 | 780 |
+| 256K | 245 (92.5) | 435 | 749 |
+| 512K | 227-244 (89.6-90.6) | 410-414 | — |
 
 Against earlier tags on the same presets (350 W):
 
@@ -173,11 +184,11 @@ sessions are really needed; spare KV beyond the running sessions only feeds pref
 Correctness set run on each shipped change (same protocol as the GLM Kraken TP3 releases: thinking on,
 `reasoning_effort` max, temperature 1 unless noted):
 
-| Test | Result on `.10` (sparse attention) | Earlier tags |
+| Test | Result on `.11` | Earlier tags |
 | --- | --- | --- |
-| 43 verifiable-answer questions, thinking off, temperature 0 (`compare_models.py`) | **43/43** | 42/43 (`.9`, bat-and-ball), 43/43 (`.8`), 41/43 (`.7`), 42/43 (`.4`-`.6`), 41-42 stock |
-| LiveBench coding (release 2024-11-25, 32K budget) | **81.5 / 81.5 / 82.5** (three runs); `.9` control in the same session 82.5 | 83.2 (`.8`, `.7`), 84.2 (`.6`), 81.9 (`.4`/`.5`), 81.3 stock Engram |
-| hotel-lights, 30 runs at 4 concurrent, seed 103 | **30 exact** / 0 wrong / 0 truncated (mean 22,201 tokens) | 30/30 on every tag (`.7` mean 21,125) |
+| 43 verifiable-answer questions, thinking off, temperature 0 (`compare_models.py`) | **42/43** (refusals 2/37) | 43/43 (`.10`), 42/43 (`.9`, bat-and-ball), 43/43 (`.8`), 41/43 (`.7`), 42/43 (`.4`-`.6`), 41-42 stock |
+| LiveBench coding (release 2024-11-25, 32K budget) | not re-run (`.11` only changes the indexer top-k back to b12x's, the `.5` path); `.10`: 81.5 / 81.5 / 82.5, `.9` control 82.5 | 83.2 (`.8`, `.7`), 84.2 (`.6`), 81.9 (`.4`/`.5`), 81.3 stock Engram |
+| hotel-lights, 30 runs at 4 concurrent, seed 103 | **30 exact** / 0 wrong / 0 truncated (mean 20,216 tokens) | 30/30 on every tag (`.7` mean 21,125) |
 | lavd, 30 runs at 4 concurrent | — | 30 exact (`.3`) |
 | Retrieval of three markers at 128K / 900K | — | pass / pass (`.3`) |
 | Long generation after a 581K-token conversation, 4 seeds | — | 4/4 clean, worst 8-gram repeat 0.0005 (`.3`) |
@@ -190,7 +201,8 @@ mapping-failure / preemption / cuBLAS lines.
 
 | Stress | Result |
 | --- | --- |
-| `.10` (sparse attention), 2x pool, c8 | **PASS**: 16/16 long, 137/137 pings, 9.56M prompt tokens, min free VRAM 490 MiB, 0 bad log lines (28 min) |
+| `.11`, 2x pool, c8 | **PASS**: 16/16 long, 130/130 pings, 9.56M prompt tokens, min free VRAM 524 MiB, 0 bad log lines (26.5 min) |
+| `.10` (sparse attention), 2x pool, c8 | PASS: 16/16 long, 137/137 pings, 9.56M prompt tokens, min free VRAM 490 MiB, 0 bad log lines (28 min) |
 | `.9` (fused, vLLM dense weights), 2x pool, c8 | PASS: 16/16 long, 135/135 pings, 9.56M prompt tokens, min free VRAM 521 MiB, 0 bad log lines (27 min) |
 | `.8` (fused decoder), 2x pool, c8 | PASS: 16/16 long, 231/231 pings, 9.56M prompt tokens, min free VRAM 511 MiB, 0 bad log lines (36 min) |
 | `.7` (vocab-split), 2x pool, c8 | PASS: 16/16 long, 262/262 pings, 9.56M prompt tokens, min free VRAM 494 MiB, 0 bad log lines (39 min) |
@@ -224,6 +236,14 @@ every draft verified at any concurrency (c8 611 instead of 752).
 **Fused decoder**: `DS41_FUSED_LAYERS=40` (default) fuses every layer; `N` fuses layers 0..N-1; `0` = the `.7` path
 (no fused engine is built). `DS41_FUSED_DENSE_NATIVE=1` (default) reads vLLM's dense weights; `0` = `.8`'s copies.
 
+**Indexer top-k**: `BRRR_RADIX_TOPK=blocks` (default) keeps only BRRR's 2,048-block radix pick; `0` = b12x's top-k for
+both (same speed), `1` = `.10` (sorted top-512 radix on: slower beyond 128K), `sorted` = that path alone.
+
+**More than 8 sequences** (opt-in, short contexts only): `compose.seqs12.yaml` / `compose.seqs16.yaml` raise
+`max-num-seqs` (CUDA graphs 72 / 96 rows) and turn on the load-scaled row cap (24 rows up to 8 decoding requests,
+`DS41_VERIFY_ROW_CAP_HIGH=32` above). 32K aggregate: c12 ~973, c16 ~1,097 tok/s (8 sequences top out at ~810);
+c1-c8 unchanged; no promotion cost. See Known limitations before using it with long prompts.
+
 **Sparse attention**: `DS41_SPARSE_DECODE=1` (default) = BRRR's decode attention; `0` = b12x's (= `.9`).
 `DS41_SPARSE_CHECK=1` runs both on eager calls and logs the difference (debugging only).
 
@@ -250,6 +270,9 @@ third-party, not audited by us; lavd/hotel-lights 30/30, retrieval pass, 41-43/4
 | --- | --- |
 | LMCache host-RAM prefix tier (`cache-mode: lmcache`, 48 or 16 GiB) | host thrash and OOM-killed workers: the engine-driven DS4.1 mode takes ~80 GB of host memory regardless of tier size, which the Engram tables already occupy |
 | Fused attention prologue for batches above 8 rows (`DS41_FUSED_PROLOGUE_MAXM` 24 / 48) | neutral: c4 190-199 and c8 351-368 steps/s either way; b12x's separate GEMMs already match it there |
+| Higher fixed row caps at 8 sequences (32 / 40 / 48) | c6 690 → 615 / 485 / 477, c8 808 → 787 / 680 / 616: 24 stays |
+| 7 drafts on `.10` | c1 level, c4 420-425 vs 481-494, c8 746-756 vs 808-820: stays an opt-in coding preset |
+| Decode context parallel (DCP3) | blocked in vLLM for V4.1; measured cost of its per-layer query gather + output merge over PCIe: 89 µs/layer at c1 with NCCL (+35% per step), best case ~8-10% at c1 and 20%+ at c8, no better than the 6x preset |
 | Upstream adaptive verification (cost model, any cost scale) | c8 +19-21% but c1 -11..-28%: a 6-row verify step really costs ~25% more than a 3-row one here, so a lone user gets trimmed to 2 drafts |
 | 7 drafts as the default | prose c1 192 vs 216-228, c4 369 vs 460 (coding peak +4-7%): kept as the `k7.yaml` preset |
 | 6-aligned CUDA-graph capture sizes | neutral (padded rows are free) |
@@ -261,7 +284,9 @@ third-party, not audited by us; lavd/hotel-lights 30/30, retrieval pass, 41-43/4
 
 - Promotion happens on the warm-up request after `/health`; requests before the `expert promotion armed and warmed`
   log line run with the parked layers in host memory (slower decode).
-- Up to 8 concurrent sequences (`max-num-seqs: 8`, CUDA graphs up to 48 decode rows).
+- Up to 8 concurrent sequences by default (`max-num-seqs: 8`, CUDA graphs up to 48 decode rows). The 12/16-sequence
+  overlays are for short contexts: 16 unique ~265K-token prompts against the 2x pool livelocked the scheduler (12
+  partly prefilled requests held 98.8% of the KV, none could finish). 8 sequences x 530K passes the same test.
 - Time to first token is ~0.25 s even for short prompts (per-request host overhead of the eager prefill pass).
 - Host RAM: ~150 GB in use while serving; a boot transiently dips to ~18 GB available. Do not run other large
   host-memory consumers (and remove any leftover `/dev/shm/lmcache_*` pools) before starting.
@@ -282,12 +307,13 @@ requests (the configured limit), the stock (FP8) Engram tables on the BRRR tags 
   `stage1.patch`, `test_phased.py`, `image/Dockerfile`, `LICENSE-brrr`, `NOTICE-brrr`), `patch-fused/` (`.8`: the
   updated `brrr/` package with the TP3 fused decoder `kernels/decoder.cu` + `decoder.py`, `vllm-patched/` `nvidia/model.py`
   and `b12x.py`, `replay.py`/`replay_csf.py`/`replay_native.py` offline replay harnesses, `image/Dockerfile` (`.8`),
-  `image/Dockerfile.9`, `image/Dockerfile.10`; `vllm-patched/models/deepseek_v4_1/attention.py` (`.10`, sparse-check hook), license files).
+  `image/Dockerfile.9`, `image/Dockerfile.10`, `image/Dockerfile.11`; `vllm-patched/v1/worker/gpu/spec_decode/adaptive_verification.py` (`.11`, load-scaled cap); `vllm-patched/models/deepseek_v4_1/attention.py` (`.10`, sparse-check hook), license files).
 - `compose.yaml`, `.env.example`, `kv.sh` + `kv-2x/4x/6x/8x.yaml`, `k7.yaml` + `ds41-launch-k7.yaml`,
+  `compose.seqs12.yaml` / `compose.seqs16.yaml` + `ds41-launch-seqs12/16.yaml` (opt-in, short contexts),
   `expert-order-blend/` (the shipped order), `expert-order/` (the image's baked order), `compose.nvfp4.yaml` (dev overlay).
 - `qualification/`: `run_qualification.py` and the GLM-derived checks, `vision/`, `coding-task/`, `kv-presets-stress/`
   (harness + per-preset results), `engram-nvidia/` (hotel-lights + eval on `.4`), `brrr-tp3/` (stress, eval, LiveBench
-  answers, hotel-lights on `.6`/`.7`; `fused/` for `.8`: eval, LiveBench, hotel-lights, stress, speed and preset logs; `fused9/` for `.9`: eval, stress, preset logs; `sparse10/` for `.10`: eval, LiveBench x3 + `.9` control, hotel-lights, stress, presets, live check vs b12x), `RESULTS.md`.
+  answers, hotel-lights on `.6`/`.7`; `fused/` for `.8`: eval, LiveBench, hotel-lights, stress, speed and preset logs; `fused9/` for `.9`: eval, stress, preset logs; `sparse10/` for `.10`: eval, LiveBench x3 + `.9` control, hotel-lights, stress, presets, live check vs b12x; `topk11/` for `.11`: indexer top-k A/B at 32K-512K, row-cap and 12/16-sequence runs, c16 stress (livelock), eval, hotel-lights, c8 stress), `RESULTS.md`.
 - `bench/`, `bench-20261019.3/`: the early prefill/needle/decode measurements and their scripts.
 - `README-history.md`: the previous README with every update section; `README-tuning.md`: expert-order procedure.
 
@@ -302,6 +328,8 @@ requests (the configured limit), the stock (FP8) Engram tables on the BRRR tags 
 | `DS41_VERIFY_ROW_CAP` | `24` | cap-only adaptive verification row ceiling; `0` = upstream cost-model adaptive |
 | `VLLM_DSPARK_SHARD_MARKOV_HEAD` / `VLLM_DSPARK_REPLICATE_MARKOV_W1` | `1` / `1` | TP-sharded DSpark markov head for the vocab-split sampler; `0`/`0` = stock head, split sampler off (= `.6`) |
 | `DS41_FUSED_LAYERS` | `40` | layers run by the fused decoder kernel; `0` = `.7` path |
+| `BRRR_RADIX_TOPK` | `blocks` | indexer top-k: `blocks` / `0` (b12x) / `1` (`.10`) / `sorted` |
+| `DS41_VERIFY_ROW_CAP_HIGH` / `DS41_VERIFY_ROW_CAP_REQS` | `0` / `8` | row cap used above `REQS` decoding requests (`0` = off; the seqs12/16 overlays set 32) |
 | `DS41_SPARSE_DECODE` | `1` | BRRR sparse decode attention; `0` = b12x attention (`.9`) |
 | `DS41_FUSED_DENSE_NATIVE` | `1` | fused kernel reads vLLM's dense weights; `0` = per-layer copies (`.8`) |
 | `BRRR_TP3_LOG` | `0` | `1` = log once per worker which BRRR kernels engaged |
@@ -312,13 +340,13 @@ requests (the configured limit), the stock (FP8) Engram tables on the BRRR tags 
 | `ENGRAM_ROW_CACHE_ROWS` | `8388608` | host row cache for disk Engram tables; `0` = off |
 | `DRAFT_NVFP4_HEAD` | `1` | DSpark drafter vocabulary head in NVFP4; `0` = BF16 |
 | `DS41_LAUNCH_SETTINGS` | `/etc/ds41/launch.yaml` | lil launcher settings file (`k7.yaml` points it at `ds41-launch-k7.yaml`) |
-| `DS41_IMAGE` | `azallaza/ds41-kraken-tp3:20261019.10` | image tag (`.9`, `.8`, `.7`, `.6`, `.5`, `.4`, `.3` remain valid) |
+| `DS41_IMAGE` | `azallaza/ds41-kraken-tp3:20261019.11` | image tag (`.10` … `.3` remain valid) |
 | `HOST_PORT`, `GPU0`/`GPU1`/`GPU2` | `15015`, `0`/`1`/`2` | API port, GPU indices |
 
 ## compose.yaml
 
 ```yaml
-# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.10
+# DeepSeek-V4.1-Flash-1017 TP3 release, image azallaza/ds41-kraken-tp3:20261019.11
 # (karmic-kraken-beta-20261016.2 + FlashInfer main 5b065abe b12x + the TP3 port in src/,
 #  + the 2026-10-31 MXFP4-Engram / NVFP4-expert patches in patch-nvfp4/, inert for stock weights).
 # Defaults: original deepseek-ai weights (MXFP4 experts, lossless), DSpark 5 drafts with
@@ -331,7 +359,7 @@ requests (the configured limit), the stock (FP8) Engram tables on the BRRR tags 
 # and ~256 GB host RAM. Tested at 450 W/GPU (350 W works; power only affects prefill).
 services:
   ds41-kraken-tp3:
-    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.10}"
+    image: "${DS41_IMAGE:-azallaza/ds41-kraken-tp3:20261019.11}"
     container_name: ds41-kraken-tp3
     # unless-stopped: auto-start on host reboot / daemon restart, but respect a manual `stop`.
     restart: "unless-stopped"
@@ -448,6 +476,8 @@ volumes:
   [DeepSeek-V4.1-Flash-1017-NVFP4](https://huggingface.co/nvidia/DeepSeek-V4.1-Flash-1017-NVFP4) (ModelOpt).
 - **Adaptive verification** (the manager the cap-only patch builds on) and everything else under the hood:
   the [vLLM](https://github.com/vllm-project/vllm) and [FlashInfer](https://github.com/flashinfer-ai/flashinfer) projects.
+- **Long-context regression report**: a user testing on 3× RTX PRO 6000 Max-Q with real coding-agent traffic found
+  that BRRR's sorted indexer top-k cost 13-15% beyond 256K, which led to the `.11` fix.
 - **Quality checks**: [LiveBench](https://github.com/LiveBench/LiveBench) (coding, release 2024-11-25).
 - Ideas reviewed while building this (not shipped in the image): [kacper-daftcode/vLLM-Moet](https://github.com/kacper-daftcode/vLLM-Moet)
   (sm_120 SASS kernels, FP4 KV) and NVIDIA's [Flare](https://github.com/NVIDIA/flare-local-inference) (MTP verification budgets).

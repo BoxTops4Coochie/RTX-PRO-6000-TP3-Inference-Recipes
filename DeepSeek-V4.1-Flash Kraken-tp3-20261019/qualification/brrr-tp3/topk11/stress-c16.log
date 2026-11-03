@@ -1,0 +1,18 @@
+[scaled-c16] capacity=2,185,581 tok -> 2 waves x 16 x ~265,000 tok unique prompts (+ pinger)
+  wave 1/2: 0/16 ok, 0 prompt tok, 1800s, minfree so far 557 MiB
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 
+    FAIL: TimeoutError: timed out 

@@ -6,6 +6,7 @@ import torch
 from brrr import cuext
 
 CANDIDATE_BLOCKS = 2048
+MODE = "1"  # set by patches.patch_indexer: 1 = both radix paths, sorted / blocks = only that one
 
 type TopK = Callable[..., tuple[torch.Tensor, torch.Tensor]]
 type Launch = Callable[..., None]
@@ -40,13 +41,14 @@ def row_topk(stock: TopK) -> TopK:
             and lengths.dtype == torch.int32
             and lengths.is_contiguous()
         )
-        if sortable:
+        if sortable and MODE in ("1", "sorted"):
             DEFERRED[output_indices.data_ptr()] = lambda out, values, visible, active, out_lengths: cuext.extension("candidates").select_sorted(
                 row_logits, lengths, visible, active, topk, out, values, out_lengths, output_gather_table
             )
             return output_values, output_indices
         blocks = (
-            plain
+            MODE in ("1", "blocks")
+            and plain
             and topk == CANDIDATE_BLOCKS
             and output_gather_table is None
             and row_logits.shape[0]

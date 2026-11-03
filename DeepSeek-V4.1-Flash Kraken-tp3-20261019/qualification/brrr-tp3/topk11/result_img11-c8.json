@@ -1,0 +1,14 @@
+{
+ "preset": "img11-c8",
+ "capacity": 2185581,
+ "verdict": "PASS",
+ "waves": 2,
+ "long_ok": 16,
+ "long_total": 16,
+ "ping_ok": 130,
+ "ping_total": 130,
+ "prompt_tokens": 9559918,
+ "min_free_mib": 524,
+ "bad_log_lines": [],
+ "wall_min": 26.511931498845417
+}
