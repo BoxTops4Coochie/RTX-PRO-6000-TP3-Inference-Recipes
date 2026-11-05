@@ -1,0 +1,107 @@
+--- a/flashinfer/experimental/b12x/sequence/engram/_tuning.py
++++ b/flashinfer/experimental/b12x/sequence/engram/_tuning.py
+@@ -22,6 +22,8 @@
+     pad_id: int
+     resident_scales: bool = False
+     max_requests: int = 1
++    # TP3 MXFP4 Engram: rows are 128 bytes of packed E2M1 (two values per byte) instead of 256 FP8 bytes.
++    packed_fp4: bool = False
+ 
+ 
+ def _validate_query(query, device):
+--- a/flashinfer/experimental/b12x/sequence/engram/_preparation.py
++++ b/flashinfer/experimental/b12x/sequence/engram/_preparation.py
+@@ -80,7 +80,7 @@
+                 gather = (compile_gather(ordinal),)
+             return (
+                 kernels._lookup.warmup(
+-                    p["weight"],
++                    _CompilePointer(torch.uint8) if query.packed_fp4 else p["weight"],
+                     p["scales"],
+                     p["hashes"],
+                     p["num_tokens"],
+@@ -92,6 +92,7 @@
+                     END=shard_end,
+                     COMPACT=query.compact_rows,
+                     RESIDENT_SCALES=query.resident_scales,
++                    PACKED_FP4=query.packed_fp4,
+                     num_warps=4,
+                     grid=(t, 24, 1),
+                 ),
+@@ -143,7 +144,7 @@
+     invocation=FrozenMapping(),
+     override=None,
+ ):
+-    unknown = set(invocation) - {"operation", "compact_rows", "resident_scales"}
++    unknown = set(invocation) - {"operation", "compact_rows", "resident_scales", "packed_fp4"}
+     if unknown:
+         raise ValueError(f"unknown Engram invocation fields: {sorted(unknown)!r}")
+     operation = invocation.get("operation", "hash")
+@@ -194,6 +195,7 @@
+         compact_rows=compact_rows,
+         pad_id=token_map[2],
+         resident_scales=invocation.get("resident_scales", False),
++        packed_fp4=invocation.get("packed_fp4", False),
+     )
+ 
+     def memory(config, device):
+@@ -268,6 +270,7 @@
+                 caps.device.index,
+             ),
+             query.resident_scales,
++            query.packed_fp4,
+         )
+ 
+     return Plan(
+--- a/flashinfer/experimental/b12x/sequence/engram/_kernels.py
++++ b/flashinfer/experimental/b12x/sequence/engram/_kernels.py
+@@ -73,6 +73,7 @@
+     END: tl.constexpr,
+     COMPACT: tl.constexpr,
+     RESIDENT_SCALES: tl.constexpr,
++    PACKED_FP4: tl.constexpr = False,
+ ):
+     t, head = tl.program_id(0), tl.program_id(1)
+     col = tl.arange(0, 256)
+@@ -84,9 +85,20 @@
+         local_row = t.to(tl.int64) * 24 + head
+     else:
+         local_row = tl.where(local, row - tl.full((), START, tl.int64), 0)
+-    quant = tl.load(weight + local_row * 256 + col.to(tl.int64), local, 0.0).to(
+-        tl.float32
+-    )
++    if PACKED_FP4:
++        # MXFP4 rows: 128 bytes of E2M1 nibbles, even column in the low nibble (ds41 engram-nvidia tables).
++        # e = bits 2:1, m = bit 0: m*0.5 if e == 0 else (2+m)*2**(e-2); bit 3 is the sign.
++        byte = tl.load(weight + local_row * 128 + (col // 2).to(tl.int64), local, 0).to(tl.int32)
++        nib = tl.where(col % 2 == 0, byte & 0xF, (byte >> 4) & 0xF)
++        e = (nib & 0x7) >> 1
++        m = (nib & 0x1).to(tl.float32)
++        pow2 = ((e - 2 + 127) << 23).to(tl.float32, bitcast=True)
++        mag = tl.where(e == 0, m * 0.5, (2.0 + m) * pow2)
++        quant = tl.where((nib & 0x8) != 0, -mag, mag)
++    else:
++        quant = tl.load(weight + local_row * 256 + col.to(tl.int64), local, 0.0).to(
++            tl.float32
++        )
+     scale_row = local_row
+     if RESIDENT_SCALES:
+         scale_row = tl.where(local, row - tl.full((), START, tl.int64), 0)
+--- a/flashinfer/experimental/b12x/sequence/engram/_impl.py
++++ b/flashinfer/experimental/b12x/sequence/engram/_impl.py
+@@ -72,13 +72,14 @@
+     _scratch_specs: tuple[ScratchBufferSpec, ...]
+     programs: tuple
+     resident_scales: bool = False
++    packed_fp4: bool = False
+ 
+     def scratch_specs(self):
+         return self._scratch_specs
+ 
+     @property
+     def weight_shape(self):
+-        return (self.shard_rows, 256)
++        return (self.shard_rows, 128 if self.packed_fp4 else 256)
+ 
+     @property
+     def scale_shape(self):

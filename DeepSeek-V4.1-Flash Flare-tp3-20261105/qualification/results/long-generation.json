@@ -1,0 +1,58 @@
+[
+  {
+    "seed": 201,
+    "content_chars": 48221,
+    "completion": 22521,
+    "finish": [
+      "stop"
+    ],
+    "repeat_8gram": 0.0,
+    "ttr": 0.675,
+    "fail": false,
+    "empty": false,
+    "repeat": false,
+    "thin": false
+  },
+  {
+    "seed": 202,
+    "content_chars": 60362,
+    "completion": 22310,
+    "finish": [
+      "stop"
+    ],
+    "repeat_8gram": 0.0007,
+    "ttr": 0.64,
+    "fail": false,
+    "empty": false,
+    "repeat": false,
+    "thin": false
+  },
+  {
+    "seed": 203,
+    "content_chars": 59442,
+    "completion": 20203,
+    "finish": [
+      "stop"
+    ],
+    "repeat_8gram": 0.0013,
+    "ttr": 0.604,
+    "fail": false,
+    "empty": false,
+    "repeat": false,
+    "thin": false
+  },
+  {
+    "seed": 204,
+    "content_chars": 61844,
+    "completion": 17641,
+    "finish": [
+      "stop"
+    ],
+    "repeat_8gram": 0.0001,
+    "ttr": 0.632,
+    "fail": false,
+    "empty": false,
+    "repeat": false,
+    "thin": false
+  }
+]

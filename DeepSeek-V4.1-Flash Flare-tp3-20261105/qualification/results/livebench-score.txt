@@ -1,0 +1,9 @@
+loaded  128  questions
+########## All Tasks ##########
+task                               LCB_generation  coding_completion
+model                                                               
+deepseek-v4.1-flash-flare-h300c4k          71.795               94.0
+########## All Groups ##########
+category                           coding
+model                                    
+deepseek-v4.1-flash-flare-h300c4k    82.9

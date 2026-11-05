@@ -1,0 +1,5 @@
+[flare-h300c4k-c8] capacity=2,991,488 tok -> 2 waves x 8 x ~530,000 tok unique prompts (+ pinger)
+  wave 1/2: 8/8 ok, 4,756,189 prompt tok, 526s, minfree so far 80 MiB
+  wave 2/2: 8/8 ok, 4,756,707 prompt tok, 502s, minfree so far 80 MiB
+(Flare log: 0 preemption lines, reported separately)
+[flare-h300c4k-c8] PASS: 16/16 long requests ok, pinger 137/137 ok, 9,512,896 prompt tok pushed, min free VRAM 80 MiB (507 samples), health=200, bad log lines=0, wall 17.2 min

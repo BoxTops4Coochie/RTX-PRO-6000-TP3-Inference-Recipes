@@ -1,0 +1,1960 @@
+diff --git a/helios/proto/package.proto b/helios/proto/package.proto
+index dfea0da..c2bc43c 100644
+--- a/helios/proto/package.proto
++++ b/helios/proto/package.proto
+@@ -250,7 +250,7 @@ message Engram {
+ }
+ 
+ message EngramTable {
+-  enum Encoding { UNSPECIFIED = 0; FP8_E4M3_E8M0 = 1; NVFP4_E4M3_GLOBAL = 2; }
++  enum Encoding { UNSPECIFIED = 0; FP8_E4M3_E8M0 = 1; NVFP4_E4M3_GLOBAL = 2; MXFP4_E2M1_E8M0 = 3; }
+   uint32 layer = 1;
+   uint64 rows = 2;
+   uint32 embedding_width = 3;
+diff --git a/helios/proto/runtime_package.proto b/helios/proto/runtime_package.proto
+index e4192a1..d53137a 100644
+--- a/helios/proto/runtime_package.proto
++++ b/helios/proto/runtime_package.proto
+@@ -530,7 +530,7 @@ message Engram {
+   repeated EngramTable tables = 4;
+ }
+ message EngramTable {
+-  enum Encoding { UNSPECIFIED = 0; FP8_E4M3_E8M0 = 1; NVFP4_E4M3_GLOBAL = 2; }
++  enum Encoding { UNSPECIFIED = 0; FP8_E4M3_E8M0 = 1; NVFP4_E4M3_GLOBAL = 2; MXFP4_E2M1_E8M0 = 3; }
+   uint32 layer = 1;
+   uint64 rows = 2;
+   uint32 embedding_width = 3;
+diff --git a/helios/src/engram.rs b/helios/src/engram.rs
+index cd043dc..ea8d5cb 100644
+--- a/helios/src/engram.rs
++++ b/helios/src/engram.rs
+@@ -357,25 +357,48 @@ impl Shared {
+             .flat_map(|table| &table.planes)
+             .map(|plane| plane.nbytes as u128)
+             .sum();
++        // TP3: FLARE_ENGRAM_RAM_LAYERS="0" keeps those Engram layers (index within this table set) fully
++        // in RAM; the remaining disk layers share the whole row-cache budget.
++        let ram_layers: Vec<usize> = std::env::var("FLARE_ENGRAM_RAM_LAYERS")
++            .unwrap_or_default()
++            .split(',')
++            .filter_map(|v| v.trim().parse().ok())
++            .collect();
++        let disk_bytes: u128 = index
++            .tables
++            .iter()
++            .enumerate()
++            .filter(|(i, _)| !ram_layers.contains(i))
++            .flat_map(|(_, table)| &table.planes)
++            .map(|plane| plane.nbytes as u128)
++            .sum::<u128>()
++            .max(1);
+         let readers = index
+             .tables
+             .iter()
+-            .map(|table| {
++            .enumerate()
++            .map(|(position, table)| {
++                let ram = storage == Storage::Ram || ram_layers.contains(&position);
+                 let bytes: u128 = table.planes.iter().map(|plane| plane.nbytes as u128).sum();
+-                let budget = usize::try_from(cache_bytes as u128 * bytes / table_bytes)
+-                    .map_err(|_| "embedding row cache exceeds host address range")?;
++                let share = if ram_layers.is_empty() { table_bytes } else { disk_bytes };
++                let budget = if ram && storage != Storage::Ram {
++                    0
++                } else {
++                    usize::try_from(cache_bytes as u128 * bytes / share)
++                        .map_err(|_| "embedding row cache exceeds host address range")?
++                };
+                 let rows = max_tokens
+                     .checked_mul(table.heads)
+                     .ok_or("embedding row capacity exceeds host range")?;
+                 reader::Reader::from_files(
+                     files,
+                     &table.planes,
+-                    storage == Storage::Ram,
++                    ram,
+                     budget,
+                     rows,
+                     stats.clone(),
+                     workers,
+-                    resident_scales,
++                    resident_scales && !ram,
+                 )
+             })
+             .collect::<Result<Vec<_>>>()?;
+diff --git a/helios/src/engram/reader.rs b/helios/src/engram/reader.rs
+index 463200f..924fc76 100644
+--- a/helios/src/engram/reader.rs
++++ b/helios/src/engram/reader.rs
+@@ -723,6 +723,23 @@ enum Data {
+ 
+ fn gather_resident(data: &Resident, row_bytes: usize, ids: &[i64], output: &mut [u8]) {
+     let data = data.bytes();
++    // Prefill gathers thousands of random rows; split large gathers across CPU threads.
++    const PARALLEL_ROWS: usize = 8192;
++    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(16);
++    if ids.len() >= PARALLEL_ROWS && threads > 1 {
++        let rows_per = ids.len().div_ceil(threads);
++        let output = &mut output[..ids.len() * row_bytes];
++        std::thread::scope(|scope| {
++            for (chunk_ids, chunk_out) in ids.chunks(rows_per).zip(output.chunks_mut(rows_per * row_bytes)) {
++                scope.spawn(move || copy_rows(data, row_bytes, chunk_ids, chunk_out));
++            }
++        });
++        return;
++    }
++    copy_rows(data, row_bytes, ids, output);
++}
++
++fn copy_rows(data: &[u8], row_bytes: usize, ids: &[i64], output: &mut [u8]) {
+     for (row, &id) in ids.iter().enumerate() {
+         let target = &mut output[row * row_bytes..(row + 1) * row_bytes];
+         if id < 0 {
+diff --git a/helios/src/execution.rs b/helios/src/execution.rs
+index bf10f1b..48d2ac6 100644
+--- a/helios/src/execution.rs
++++ b/helios/src/execution.rs
+@@ -39,3 +39,10 @@ pub use manifest::{
+     DEFAULT_COMPLETION_TOKEN_CAPACITY, COMPLETION_METADATA_FIELDS, resolve_completion_token_capacity, MAX_TOP_LOGPROBS, MAX_LOGPROB_TOKEN_IDS, PROMPT_FIELDS, REQUEST_LANES,
+     SamplingMode,
+ };
++
++/// Debug A/B (DeepSeek decode-corruption hunt, flare#193): `FLARE_SINGLE_SUBMISSION=1` keeps at most one
++/// generation submission in flight, disabling the two-frame CPU/GPU overlap introduced in bce032c.
++pub(crate) fn single_submission() -> bool {
++    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *FLAG.get_or_init(|| std::env::var_os("FLARE_SINGLE_SUBMISSION").is_some_and(|v| v != "0" && !v.is_empty()))
++}
+diff --git a/helios/src/execution/parallel.rs b/helios/src/execution/parallel.rs
+index b4f43bd..f7b53e7 100644
+--- a/helios/src/execution/parallel.rs
++++ b/helios/src/execution/parallel.rs
+@@ -56,7 +56,7 @@ fn completion_frame(pending: &mut VecDeque<Pending>, rank: usize, fence: Fence,
+     Ok(frame)
+ }
+ fn window_available(pending: &VecDeque<Pending>, grammar: bool, manifest: &ExecutionManifest) -> bool {
+-    pending.len() < 2
++    pending.len() < if super::single_submission() { 1 } else { 2 }
+         && pending.back().is_none_or(|frame| frame.committed)
+         && (!grammar || pending.is_empty())
+         && !pending.iter().any(|frame| frame.grammar || !matches!(
+diff --git a/helios/src/execution/threaded.rs b/helios/src/execution/threaded.rs
+index 5d6defb..089fdfc 100644
+--- a/helios/src/execution/threaded.rs
++++ b/helios/src/execution/threaded.rs
+@@ -269,6 +269,7 @@ impl ThreadedExecutor {
+     pub fn can_submit(&self, grammar: bool) -> bool {
+         self.poison.is_none()
+             && self.shutdown.is_none()
++            && (!super::single_submission() || self.pending.is_empty())
+             && protocol::can_submit_pending(&self.pending, grammar, self.local.manifest())
+             && self.local.can_submit(grammar)
+     }
+diff --git a/helios/src/execution/transport.rs b/helios/src/execution/transport.rs
+index 2dac508..7bb0a3d 100644
+--- a/helios/src/execution/transport.rs
++++ b/helios/src/execution/transport.rs
+@@ -590,6 +590,7 @@ impl GraphExecutor {
+         };
+         self.startup_ready && self.poison.is_none()
+             && resources.frames[self.next_sequence as usize % 2].pending.is_none()
++            && (!super::single_submission() || resources.frames.iter().all(|frame| frame.pending.is_none()))
+             && !resources
+                 .frames
+                 .iter()
+diff --git a/helios/src/runtime_package/engram.rs b/helios/src/runtime_package/engram.rs
+index 2a388d1..72122ba 100644
+--- a/helios/src/runtime_package/engram.rs
++++ b/helios/src/runtime_package/engram.rs
+@@ -115,6 +115,8 @@ pub(super) fn decode<F: super::payload::Files>(
+             .map_err(|_| invalid("unknown n-gram encoding"))?;
+         let (width, block, row_bytes, scale_bytes) = match encoding {
+             wire::engram_table::Encoding::Fp8E4m3E8m0 => (256, 32, 256, 8),
++            // TP3: DeepSeek Engram tables as packed MXFP4 (E2M1 pairs) with E8M0 scales per 32 columns.
++            wire::engram_table::Encoding::Mxfp4E2m1E8m0 => (256, 32, 128, 8),
+             wire::engram_table::Encoding::Nvfp4E4m3Global
+                 if table.global_scale.is_finite() && table.global_scale > 0.0 =>
+             {
+diff --git a/helios/src/runtime_package/memory.rs b/helios/src/runtime_package/memory.rs
+index 7f49bf5..a30f0c8 100644
+--- a/helios/src/runtime_package/memory.rs
++++ b/helios/src/runtime_package/memory.rs
+@@ -145,7 +145,7 @@ fn fixed_bytes(package: &Package, integrated: bool) -> Result<u64> {
+         })
+         .try_fold(0u64, |total, a| {
+             total
+-                .checked_add(a.nbytes as u64)
++                .checked_add(super::mixed_device_bytes(a).unwrap_or(a.nbytes) as u64)
+                 .ok_or_else(|| invalid("fixed model memory overflows the device budget"))
+         })
+ }
+diff --git a/helios/src/runtime_package/mod.rs b/helios/src/runtime_package/mod.rs
+index e506a04..5a1c7e8 100644
+--- a/helios/src/runtime_package/mod.rs
++++ b/helios/src/runtime_package/mod.rs
+@@ -459,7 +459,7 @@ impl NativeResources {
+                             .is_some_and(|a| a.nbytes > 0)
+                 })
+                 .try_fold(0usize, |total, allocation| {
+-                    total.checked_add(allocation.nbytes)
++                    total.checked_add(mixed_device_bytes(allocation).unwrap_or(allocation.nbytes))
+                 })
+                 .ok_or_else(|| invalid("package device footprint overflows address space"))?;
+             let free = self.available_memory()?;
+@@ -495,29 +495,39 @@ impl NativeResources {
+                 let address = if let Some(address) = allocation.address {
+                     match allocation.memory {
+                         Memory::Device => {
+-                            let properties = AllocationProperties {
+-                                kind: 1,
+-                                handles: 0,
+-                                location: Location {
++                            // TP3 merged expert banks (`mixed-<index>-<device bytes>`): the prefix is
++                            // device memory and the rest pinned host-NUMA memory, mapped contiguously.
++                            let device_bytes = mixed_device_bytes(allocation).unwrap_or(allocation.nbytes);
++                            let mut numa = 0;
++                            if device_bytes < allocation.nbytes {
++                                driver.check(
++                                    "cuDeviceGetAttribute",
++                                    (driver.device_attribute)(&mut numa, 134, self.device),
++                                )?;
++                            }
++                            for (offset, nbytes, location) in [
++                                (0, device_bytes, Location { kind: 1, device: self.device }),
++                                (device_bytes, allocation.nbytes - device_bytes, Location { kind: 3, device: numa.max(0) }),
++                            ] {
++                                if nbytes == 0 {
++                                    continue;
++                                }
++                                let properties = AllocationProperties {
+                                     kind: 1,
+-                                    device: self.device,
+-                                },
+-                                windows: null_mut(),
+-                                flags: [0; 8],
+-                            };
+-                            let mut physical = 0;
+-                            driver.check(
+-                                "cuMemCreate",
+-                                (driver.physical_create)(
+-                                    &mut physical,
+-                                    allocation.nbytes,
+-                                    &properties,
+-                                    0,
+-                                ),
+-                            )?;
+-                            let mapped = (driver.map)(address, allocation.nbytes, 0, physical, 0);
+-                            (driver.physical_release)(physical);
+-                            driver.check("cuMemMap", mapped)?;
++                                    handles: 0,
++                                    location,
++                                    windows: null_mut(),
++                                    flags: [0; 8],
++                                };
++                                let mut physical = 0;
++                                driver.check(
++                                    "cuMemCreate",
++                                    (driver.physical_create)(&mut physical, nbytes, &properties, 0),
++                                )?;
++                                let mapped = (driver.map)(address + offset as u64, nbytes, 0, physical, 0);
++                                (driver.physical_release)(physical);
++                                driver.check("cuMemMap", mapped)?;
++                            }
+                         }
+                         Memory::MappedHost => {
+                             #[cfg(unix)]
+@@ -574,7 +584,13 @@ impl NativeResources {
+                         mappings: if allocation.address.is_some()
+                             && matches!(allocation.memory, Memory::Device)
+                         {
+-                            vec![(address, allocation.nbytes)]
++                            match mixed_device_bytes(allocation) {
++                                Some(device) if device < allocation.nbytes => vec![
++                                    (address, device),
++                                    (address + device as u64, allocation.nbytes - device),
++                                ],
++                                _ => vec![(address, allocation.nbytes)],
++                            }
+                         } else {
+                             Vec::new()
+                         },
+@@ -1199,3 +1215,9 @@ impl Drop for NativeResources {
+         }
+     }
+ }
++
++/// TP3 merged expert bank (`mixed-<index>-<device bytes>`): device bytes of a VRAM/host-NUMA allocation.
++pub(super) fn mixed_device_bytes(allocation: &format::Allocation) -> Option<usize> {
++    let rest = allocation.name.strip_prefix("mixed-")?;
++    rest.rsplit_once('-')?.1.parse().ok()
++}
+diff --git a/helios/src/runtime_package/model.rs b/helios/src/runtime_package/model.rs
+index 229d9cf..984582b 100644
+--- a/helios/src/runtime_package/model.rs
++++ b/helios/src/runtime_package/model.rs
+@@ -679,7 +679,11 @@ impl NativeModel {
+             let (mut gpu_bytes, mut host_bytes, mut payload_bytes) = (0u64, 0u64, 0u64);
+             for allocation in packages.iter().flat_map(|package| &package.allocations) {
+                 match allocation.memory {
+-                    Memory::Device => gpu_bytes += allocation.nbytes as u64,
++                    Memory::Device => {
++                        let device = super::mixed_device_bytes(allocation).unwrap_or(allocation.nbytes);
++                        gpu_bytes += device as u64;
++                        host_bytes += (allocation.nbytes - device) as u64;
++                    }
+                     Memory::MappedHost => host_bytes += allocation.nbytes as u64,
+                     Memory::Peer => {}
+                 }
+@@ -732,8 +736,20 @@ impl NativeModel {
+                 let group_budget = embedding_table_cache_bytes / engram.len() as u64;
+                 let files = files.direct_files().collect::<Result<Vec<_>>>()?;
+                 let mut bindings = Vec::new();
+-                for ((index, ranks), tokens) in engram.into_iter().zip(engram_tokens) {
++                // TP3: FLARE_ENGRAM_RAM_TABLES="0,2" keeps those Engram tables fully in RAM while the
++                // others follow --embedding-table-storage (the first Engram layer has the least slack).
++                let ram_tables: Vec<usize> = std::env::var("FLARE_ENGRAM_RAM_TABLES")
++                    .unwrap_or_default()
++                    .split(',')
++                    .filter_map(|v| v.trim().parse().ok())
++                    .collect();
++                for (position, ((index, ranks), tokens)) in engram.into_iter().zip(engram_tokens).enumerate() {
+                     let first = ranks[0];
++                    let storage = if ram_tables.contains(&position) {
++                        crate::engram::Storage::Ram
++                    } else {
++                        storage
++                    };
+                     let shared = crate::engram::Shared::new(
+                         index,
+                         &files,
+@@ -742,9 +758,9 @@ impl NativeModel {
+                         model.ranks[first].context as usize,
+                         devices[first],
+                         storage,
+-                        group_budget,
++                        if storage == crate::engram::Storage::Ram { 0 } else { group_budget },
+                         options.embedding_workers(),
+-                        embedding_table_resident_scales,
++                        embedding_table_resident_scales && storage == crate::engram::Storage::Disk,
+                     )?;
+                     for (delivery_rank, local) in ranks.into_iter().enumerate() {
+                         bindings.push((local, shared.clone(), delivery_rank));
+diff --git a/ignition/components/dspark.py b/ignition/components/dspark.py
+index a1985ce..259cc03 100644
+--- a/ignition/components/dspark.py
++++ b/ignition/components/dspark.py
+@@ -29,6 +29,12 @@ class DSparkForwards:
+ 
+ 
+ class SpeculativePreparation:
++    COPY_INPUTS = ("copy_token_ids", "copy_token_count", "copy_expected_consumed", "copy_generation")
++
++    def copy_buffers(self):
++        return {"copy_token_ids": self.copy_ids, "copy_token_count": self.copy_count,
++                "copy_expected_consumed": self.copy_expected, "copy_generation": self.copy_generation}
++
+     def __init__(
+         self,
+         weights,
+@@ -67,6 +73,13 @@ class SpeculativePreparation:
+             "runtime": runtime, "vocabulary_runtime": vocabulary_runtime, "coordinator": coordinator
+         }
+         self.vocabulary_parallel_sampling = vocabulary_parallel_sampling
++        # Copied history proposals (flare run --history-drafts): Helios writes each request's continuation
++        # of shared decoded history; inactive unless the count is positive and the cursor is fresh.
++        capacity, device = requests.capacity, requests.status.device
++        self.copy_ids = torch.full((capacity, 7), -1, dtype=torch.int64, device=device)
++        self.copy_count = torch.zeros(capacity, dtype=torch.int32, device=device)
++        self.copy_expected = torch.full((capacity,), -1, dtype=torch.int64, device=device)
++        self.copy_generation = torch.zeros(capacity, dtype=torch.int64, device=device)
+         self.sampling_runtime, self.logprob_runtime = sampling_runtime, logprob_runtime
+         self.markov_runtime = markov_runtime
+         # Only sampling uses the result channel; model forwards receive the collectives above.
+diff --git a/ignition/components/engram.py b/ignition/components/engram.py
+index 9dc09a6..ceff932 100644
+--- a/ignition/components/engram.py
++++ b/ignition/components/engram.py
+@@ -24,7 +24,8 @@ def _lookup(source: torch.Tensor, weight: torch.Tensor, scales: torch.Tensor,
+             timings: torch.Tensor, frame: torch.Tensor, barrier_input: torch.Tensor,
+             barrier_output: torch.Tensor, interval: int, barrier: int, plan: int, event: int) -> None:
+     wait_for_readiness(source, event, timings, frame, interval, barrier_input, barrier_output, barrier)
+-    lookup_op(plan, weight.view(torch.float8_e4m3fn), scales, hashes, count, out, hashes.shape[0], True)
++    lookup_op(plan, weight if weight.shape[-1] == 128 else weight.view(torch.float8_e4m3fn),
++              scales, hashes, count, out, hashes.shape[0], True)
+ 
+ 
+ @_lookup.register_fake
+@@ -43,10 +44,11 @@ class EngramInputs:
+     interval: int
+ 
+     @classmethod
+-    def allocate(cls, tokens, device, *, timings, interval=0):
++    def allocate(cls, tokens, device, *, timings, interval=0, packed_fp4=False):
+         ready = torch.cuda.Event(external=True)
+         ready.record(torch.cuda.current_stream(device))
+-        return cls(torch.zeros((tokens * 24, 256), dtype=torch.uint8, device=device),
++        # Staged rows: 256 FP8 bytes, or 128 bytes of packed MXFP4 pairs.
++        return cls(torch.zeros((tokens * 24, 128 if packed_fp4 else 256), dtype=torch.uint8, device=device),
+                    torch.zeros((tokens * 24, 8), dtype=torch.uint8, device=device),
+                    torch.full((tokens, 24), -1, dtype=torch.int64, device=device), ready, timings, interval)
+ 
+@@ -68,8 +70,9 @@ class PreparedEngramLookup:
+         self.plan = engram.plan(engram.Caps(device=output.device, max_tokens=tokens,
+             max_seqs=tokens, max_requests=tokens, vocab_size=len(token_map), layer_id=layer,
+             tp_size=1, tp_rank=0), token_map=token_map, geometry=geometry,
+-            invocation={"operation": "lookup", "compact_rows": True})
+-        binding = SimpleNamespace(weight=self.weights.view(torch.float8_e4m3fn),
++            invocation={"operation": "lookup", "compact_rows": True,
++                        **({"packed_fp4": True} if self.weights.shape[-1] == 128 else {})})
++        binding = SimpleNamespace(weight=self.weights if self.weights.shape[-1] == 128 else self.weights.view(torch.float8_e4m3fn),
+             scale_bytes=self.scales, hash_ids=self.hashes, num_tokens=count, out=output)
+         declare(session, (self.plan.request(name=name, prepare_call=lambda state: PreparedCall(
+             run=lambda: state.run_lookup(binding, tokens, clear_tail=True), owners=(inputs, binding))),))
+diff --git a/ignition/components/parallel_draft.py b/ignition/components/parallel_draft.py
+index d323dd8..6c216d3 100644
+--- a/ignition/components/parallel_draft.py
++++ b/ignition/components/parallel_draft.py
+@@ -322,6 +322,9 @@ class PreparedParallelDraftRound:
+         from .vocabulary_sampling import PreparedVocabularySoftmax, PreparedVocabularyBlockVerification
+ 
+         o, b, w = self.owner, self.batch, self.width
++        # This rank's global vocabulary IDs as a buffer: compiled forwards are shared across ranks.
++        copy_start, _ = o.weights.shard.padded_partition(o.requests.vocab_size, alignment=64)
++        self.copy_columns = torch.arange(self.probabilities.shape[-1], device=self.probabilities.device) + copy_start
+         args = (o.requests, o.inputs.row_slot_ids[:b], o.inputs.row_generations[:b], o.inputs.live_rows)
+         start, _ = o.weights.shard.padded_partition(o.requests.vocab_size, alignment=64)
+         options = dict(start=start, runtime=o.sampling_runtime, session=o.session,
+@@ -362,6 +365,27 @@ class PreparedParallelDraftRound:
+         commit.prepare()
+         self.operations = target, (), verify, commit
+ 
++    def _apply_copied_proposals(self, safe, limits):
++        """Replace a row's learned drafts with its fresh copied history continuation (point-mass proposals)."""
++        o = self.owner
++        if not hasattr(o, "copy_ids"):
++            return
++        positions = self.draft_positions
++        ids = o.copy_ids[safe][:, :positions.numel()]
++        fresh = (self.active & (o.copy_count[safe] > 0)
++                 & (o.copy_generation[safe] == o.requests.generation[safe])
++                 & (o.copy_expected[safe] == self.before))
++        usable = ((positions[None, :] < o.copy_count[safe, None]) & (ids >= 0) & (ids < o.requests.vocab_size)
++                  & (positions[None, :] < limits[:, None] - 1))
++        # Copied tokens replace the learned drafts over the matched prefix; later positions keep their learned
++        # drafts and proposal distributions, which stay exact proposals (verification requires every position
++        # within the verified prefix to carry a valid normalized proposal).
++        copied = fresh[:, None] & usable.int().cumprod(1).bool()
++        self.drafts.copy_(torch.where(copied, ids, self.drafts))
++        self.valid.logical_or_(copied)
++        point = (self.copy_columns[None, None, :] == ids[:, :, None]).float()
++        self.probabilities.copy_(torch.where(copied[:, :, None], point, self.probabilities))
++
+     def __call__(self):
+         self.propose()
+         self.verify()
+@@ -404,6 +428,7 @@ class PreparedParallelDraftRound:
+                 self.full_proposal()
+                 if self.vocabulary_parallel:
+                     self.valid.logical_and_(self.active[:, None] & (self.draft_positions[None, :] < limits[:, None] - 1))
++                    self._apply_copied_proposals(safe, limits)
+                     self.sampled.copy_(self.drafts[:, -1])
+                     self.markov_token.copy_(self.sampled)
+             for i, proposal in enumerate(proposals):
+diff --git a/ignition/components/weights.py b/ignition/components/weights.py
+index 63fe20a..3b83967 100644
+--- a/ignition/components/weights.py
++++ b/ignition/components/weights.py
+@@ -712,6 +712,13 @@ def _release_unused_contexts(device):
+             driver.cuDevicePrimaryCtxReset_v2(handle)
+ 
+ 
++def _park_on_host(host_allocator, name, tensor):
++    """Copy a loaded device tensor into device-visible host memory (TP3 expert parking)."""
++    region = host_allocator(name, tuple(tensor.shape), tensor.dtype).device_view
++    region.copy_(tensor)
++    return region
++
++
+ class DirectWeightLoader:
+     """Own b12x tensor views until direct transfers finish.
+ 
+@@ -1307,9 +1314,12 @@ class DirectWeightLoader:
+                          weight_name="weight", activation="silu", w13_layout="w13", shared_columns=None,
+                          global_scale_name="weight_scale_2", global_scale_kind="multiplier",
+                          input_scale_name=None, activation_outer_scale="expert",
+-                         swiglu_alpha=None, swiglu_beta=None, a4_prefill=None):
++                         swiglu_alpha=None, swiglu_beta=None, a4_prefill=None, host_allocator=None):
+         """Prepare NVFP4 or MXFP4 experts, optionally compressing their block scales.
+ 
++        With ``host_allocator`` (TP3 expert parking) the packed w13/w2 banks move to
++        device-visible host memory after loading and their device copies are freed.
++
+         The first two projection names fill the first and second w13 halves in that
+         order; ``w13_layout`` declares which halves hold up and gate. CSF compression
+         requires two caller-owned expansion buffers. Serial routed layers may share
+@@ -1439,6 +1449,10 @@ class DirectWeightLoader:
+             self._copy(target, values)
+             device_scales.append(target)
+         self._session.flush()
++        if host_allocator is not None:
++            w13, w2 = (_park_on_host(host_allocator, f"{prefixes[0]}.{suffix}", tensor)
++                       for suffix, tensor in (("w13", w13), ("w2", w2)))
++            torch.cuda.empty_cache()
+         if sm103:
+             if swiglu_clamp_after_silu:
+                 raise ValueError("SM103 FP4 experts do not support post-SiLU clamping")
+@@ -1489,6 +1503,7 @@ class DirectWeightLoader:
+         self, prefixes, *, hidden_size, intermediate_size, scale_scratch,
+         intermediate_range=None, swiglu_limit=None, scale_compression=None,
+         projection_names=("up_proj", "gate_proj", "down_proj"), scale_name="weight_scale",
++        host_allocator=None,
+     ):
+         """Load MXFP4 storage, optionally compressing native scales losslessly.
+ 
+@@ -1510,9 +1525,11 @@ class DirectWeightLoader:
+         geometry = dict(hidden_size=hidden_size, intermediate_size=intermediate_size,
+                         intermediate_range=intermediate_range, swiglu_limit=swiglu_limit,
+                         scale_name=scale_name)
++        if host_allocator is not None and any(encoded):
++            raise ValueError("host-parked experts support native-scale checkpoints only")
+         if not any(encoded) and scale_compression is None:
+             return self.load_fp4_experts(prefixes, **geometry, format="mxfp4", activation_mode="a8",
+-                                         projection_names=projection_names)
++                                         projection_names=projection_names, host_allocator=host_allocator)
+         if any(encoded) and not all(encoded):
+             raise ValueError("each routed expert group must use one complete MXFP4 scale encoding")
+         first, last = _aligned_range(intermediate_range, intermediate_size, 32)
+@@ -1524,7 +1541,7 @@ class DirectWeightLoader:
+         if not any(encoded):
+             return self.load_fp4_experts(prefixes, **geometry, format="mxfp4", activation_mode="a8",
+                 projection_names=projection_names, scale_compression=scale_compression,
+-                scale_scratch=scale_scratch[key])
++                scale_scratch=scale_scratch[key], host_allocator=host_allocator)
+         up, gate, down = projection_names
+         return self.load_mxfp4_csf_experts(prefixes, **geometry,
+             scale_scratch=scale_scratch[key], projection_names=(gate, up, down))
+diff --git a/ignition/planning.py b/ignition/planning.py
+index a9a20f4..653732c 100644
+--- a/ignition/planning.py
++++ b/ignition/planning.py
+@@ -52,6 +52,13 @@ class Gpu:
+         return self.capability in SUPPORTED_CAPABILITIES
+ 
+ 
++def _tp3_vocabulary_parallel() -> bool:
++    """ds41-tp3-v2: FLARE_DS41_TP3_VOCAB_PARALLEL=1 admits vocabulary-parallel sampling at TP3 (b12x gathers
++    enabled for world 3); experimental until validated end to end."""
++    import os
++    return os.environ.get("FLARE_DS41_TP3_VOCAB_PARALLEL", "") not in ("", "0")
++
++
+ def discover_gpus() -> tuple[Gpu, ...]:
+     """Enumerate NVML devices and include the shared CUDA budget on Windows iGPUs."""
+     try:
+@@ -425,7 +432,7 @@ def fit(recipe: Recipe, checkpoint: Checkpoint, gpus: tuple[Gpu, ...], *, concur
+             raise UsageError(f"--speculative-method {speculation.method}: {checkpoint.alias} does not prepare this proposal method")
+         if speculation.vocabulary_parallel_sampling and recipe.name != "deepseek41":
+             raise UsageError("--vocabulary-parallel-sampling requires DeepSeek V4.1")
+-        if speculation.vocabulary_parallel_sampling and len(gpus) == 3:
++        if speculation.vocabulary_parallel_sampling and len(gpus) == 3 and not _tp3_vocabulary_parallel():
+             raise UsageError("--vocabulary-parallel-sampling has no TP3 gather; select four GPUs")
+         for head in ("draft", "markov"):
+             value = getattr(speculation, f"{head}_head_quantization")
+@@ -545,7 +552,8 @@ def plan(recipe: Recipe, checkpoint: Checkpoint, gpus: tuple[Gpu, ...], *, selec
+     if speculation is not None and speculation.vocabulary_parallel_sampling:
+         if recipe.name != "deepseek41":
+             raise UsageError("--vocabulary-parallel-sampling requires DeepSeek V4.1")
+-        world_sizes = tuple(size for size in world_sizes if size != 3)
++        if not _tp3_vocabulary_parallel():
++            world_sizes = tuple(size for size in world_sizes if size != 3)
+     sizes = " or ".join(map(str, world_sizes))
+     supported = [gpu for gpu in gpus if gpu.supported]
+     chosen = None
+@@ -554,7 +562,7 @@ def plan(recipe: Recipe, checkpoint: Checkpoint, gpus: tuple[Gpu, ...], *, selec
+             raise UsageError(f"--gpus {format_gpus(selected)} names a GPU this host does not have;"
+                              f" it has {len(gpus)}")
+         chosen = tuple(gpus[index] for index in selected)
+-        if speculation is not None and speculation.vocabulary_parallel_sampling and len(chosen) == 3:
++        if speculation is not None and speculation.vocabulary_parallel_sampling and len(chosen) == 3 and not _tp3_vocabulary_parallel():
+             raise UsageError("--vocabulary-parallel-sampling has no TP3 gather; select four GPUs")
+         if len(chosen) not in world_sizes:
+             size = min(world_sizes, key=lambda size: (size < len(chosen), size))
+diff --git a/ignition/preparation/capture.py b/ignition/preparation/capture.py
+index 3569041..799e0ef 100644
+--- a/ignition/preparation/capture.py
++++ b/ignition/preparation/capture.py
+@@ -4,6 +4,7 @@
+ 
+ """Compile prepared model forwards and capture one native executable per shape."""
+ 
++import os
+ from contextlib import nullcontext
+ from time import monotonic
+ 
+@@ -92,6 +93,37 @@ def capture_forwards(functions, signatures, *, session, device, stream, pool,
+         release_unused()
+     elif materialize is not None:
+         materialize()
++    # TP3 profiling (opt-in, FLARE_DS41_EAGER_PROFILE=<substring>): run matching forwards eagerly (compiled code,
++    # no graph capture) inside a cudaProfiler range for nsys --capture-range=cudaProfilerApi, then exit.
++    profile_match = os.getenv("FLARE_DS41_EAGER_PROFILE")
++    if profile_match and label != "Prepare and tune kernels":
++        iters = int(os.getenv("FLARE_DS41_EAGER_ITERS", "20"))
++        targets = [name for name in names if profile_match in name]
++        if progress is not None:
++            progress(f"eager-profile targets ({profile_match!r}): {targets} of {list(names)}")
++        if targets:
++            for name in targets:
++                fn = compiled.get(name, functions[name])
++                if coordinator is not None:
++                    coordinator.barrier(f"profile {name}", coordinator.ranks)
++                stream.wait_stream(torch.cuda.current_stream(device))
++                with warmup(), torch.cuda.stream(stream):
++                    for _ in range(3):
++                        fn()
++                    stream.synchronize()
++                    torch.cuda.nvtx.range_push(f"ds41_profile_{name}")
++                    torch.cuda.profiler.start()
++                    for _ in range(iters):
++                        torch.cuda.nvtx.range_push("step")
++                        fn()
++                        torch.cuda.nvtx.range_pop()
++                    stream.synchronize()
++                    torch.cuda.profiler.stop()
++                    torch.cuda.nvtx.range_pop()
++            torch.cuda.synchronize(device)
++            import sys
++            sys.stdout.flush()
++            sys.exit(0)
+     with phase(progress, label, total=len(names)) as stage:
+         for name in names:
+             function = functions[name]
+diff --git a/ignition/preparation/ladders/gb202_pcie_tp3.json b/ignition/preparation/ladders/gb202_pcie_tp3.json
+new file mode 100644
+index 0000000..4169398
+--- /dev/null
++++ b/ignition/preparation/ladders/gb202_pcie_tp3.json
+@@ -0,0 +1,18 @@
++{
++  "version": 2,
++  "name": "gb202_pcie_tp3",
++  "compute_capability": [12, 0],
++  "world_size": 3,
++  "dtype": "bfloat16",
++  "inplace": false,
++  "cache_policy": "cold",
++  "min_bytes": 16,
++  "buckets": [
++    {"max_bytes": 8192, "implementation": "joint_latency", "threads": 128, "blocks": 64, "profiles": {"full": [1, 4, 16, 64]}},
++    {"max_bytes": 65536, "implementation": "joint_latency", "threads": 256, "blocks": 64, "profiles": {"full": [4, 16, 64], "pull": [8, 36]}},
++    {"max_bytes": 1048576, "implementation": "joint_bandwidth", "threads": 128, "blocks": 64, "profiles": {"pull": [8, 36], "bulk_pull": [32, 64]}},
++    {"max_bytes": 10485760, "implementation": "joint_bandwidth", "threads": 128, "blocks": 64, "profiles": {"bulk_pull": [32, 64], "bulk_push": [36, 64]}},
++    {"max_bytes": 25165824, "implementation": "joint_bandwidth", "threads": 128, "blocks": 64, "profiles": {"bulk_pull": [32, 64], "bulk_push": [36, 64]}}
++  ],
++  "all_gather": null
++}
+diff --git a/ignition/preparation/module_images.py b/ignition/preparation/module_images.py
+index ebbb432..cdf2cb2 100644
+--- a/ignition/preparation/module_images.py
++++ b/ignition/preparation/module_images.py
+@@ -51,12 +51,21 @@ class ModuleImages:
+         return self.native.allocation_contexts()
+ 
+     def __enter__(self):
++        import os
++        if os.getenv("FLARE_DS41_EAGER_PROFILE"):
++            # An external CUPTI profiler is attached; skip our recorder (CUPTI allows one subscriber).
++            ModuleImages.active += 1
++            return self
+         self.native.start()
+         self._active = True
+         ModuleImages.active += 1
+         return self
+ 
+     def __exit__(self, kind, value, traceback):
++        import os
++        if os.getenv("FLARE_DS41_EAGER_PROFILE") and not self._active:
++            ModuleImages.active -= 1
++            return
+         try:
+             self.native.stop()
+         finally:
+diff --git a/ignition/preparation/package_storage.py b/ignition/preparation/package_storage.py
+index 3d8fc93..60e30a1 100644
+--- a/ignition/preparation/package_storage.py
++++ b/ignition/preparation/package_storage.py
+@@ -57,6 +57,7 @@ class PackageStorage:
+ 
+         self.host_regions = []
+         self.dynamic_regions = []
++        self.mixed_regions = []
+         from .tensor_metadata import NumericStorage
+ 
+         self.numeric_storage = NumericStorage()
+@@ -256,6 +257,25 @@ class PackageStorage:
+         self.host_regions.append(region)
+         return region
+ 
++    def mixed_allocate(self, name, shape, dtype, *, device_rows):
++        """TP3 merged expert bank: one virtual range whose first `device_rows` rows are VRAM and
++        the rest pinned host memory, so one kernel call reads hot and cold experts alike."""
++        import torch
++        from b12x.sequence._shared.disk_table import _tensor_from_pointer
++
++        row = math.prod(shape[1:]) * dtype.itemsize
++        address = self._device_cursor
++        region = MixedRegion(self.cuda, address, shape[0] * row, device_rows * row, self.device)
++        if address + region.extent > self.DEVICE_BASE + self.RESERVATION_BYTES:
++            region.close()
++            raise MemoryError("mixed expert storage address range exhausted")
++        region.name = name
++        self.mixed_regions.append(region)
++        self._device_cursor += region.extent
++        region.device_view = _tensor_from_pointer(address, shape=tuple(shape), dtype=dtype,
++            device=torch.device("cuda", self.device), nbytes=math.prod(shape) * dtype.itemsize)
++        return region
++
+     def device_allocate(self, name, shape, dtype, *, group, maximum, units=None):
+         """Map a prefix of a stable virtual range for runtime-sized storage."""
+         import torch
+@@ -472,6 +492,57 @@ class ScratchPool:
+             self.unbacked.pop()
+ 
+ 
++class MixedRegion:
++    """Device-backed prefix and host-NUMA-backed tail mapped contiguously in the rank's device range."""
++
++    def __init__(self, cuda, address, nbytes, device_bytes, device):
++        self.cuda, self.address, self.closed = cuda, address, True
++        numa = C.c_int()
++        cuda.call("cuDeviceGetAttribute", C.byref(numa), C.c_int(134), C.c_int(device))
++        device_properties = _Properties(1, 0 if os.name == "nt" else 1, _Location(1, device), None, (C.c_ubyte * 8)())
++        host_properties = _Properties(1, 0, _Location(3, max(0, numa.value)), None, (C.c_ubyte * 8)())
++        granularity = 0
++        for properties in (device_properties, host_properties):
++            value = C.c_size_t()
++            cuda.call("cuMemGetAllocationGranularity", C.byref(value), C.byref(properties), C.c_int(0))
++            granularity = max(granularity, value.value)
++        up = lambda n: -(-n // granularity) * granularity
++        # The page holding the hot/cold boundary stays on the device.
++        self.device_bytes = min(up(device_bytes), up(nbytes))
++        self.extent = up(nbytes)
++        self.host_bytes = self.extent - self.device_bytes
++        self.granularity = granularity
++        self.mapped = []
++        try:
++            for size, properties, offset in ((self.device_bytes, device_properties, 0),
++                                             (self.host_bytes, host_properties, self.device_bytes)):
++                if not size:
++                    continue
++                physical = C.c_uint64()
++                cuda.call("cuMemCreate", C.byref(physical), C.c_size_t(size), C.byref(properties), C.c_uint64(0))
++                try:
++                    cuda.call("cuMemMap", C.c_uint64(address + offset), C.c_size_t(size), C.c_size_t(0),
++                              physical, C.c_uint64(0))
++                finally:
++                    cuda.call("cuMemRelease", physical)
++                self.mapped.append((address + offset, size))
++            access = _Access(_Location(1, device), 3)
++            cuda.call("cuMemSetAccess", C.c_uint64(address), C.c_size_t(self.extent), C.byref(access), C.c_size_t(1))
++            cuda.call("cuMemsetD8_v2", C.c_uint64(address), C.c_ubyte(0), C.c_size_t(self.extent))
++        except BaseException:
++            for start, size in self.mapped:
++                cuda.call("cuMemUnmap", C.c_uint64(start), C.c_size_t(size))
++            raise
++        self.closed = False
++
++    def close(self):
++        if not self.closed:
++            self.cuda.call("cuCtxSynchronize")
++            for start, size in self.mapped:
++                self.cuda.call("cuMemUnmap", C.c_uint64(start), C.c_size_t(size))
++            self.closed = True
++
++
+ class DeviceRegion:
+     def __init__(self, cuda, address, nbytes, device):
+         self.cuda, self.device, self.address, self.nbytes = cuda, device, address, 0
+diff --git a/ignition/preparation/runtime_package.py b/ignition/preparation/runtime_package.py
+index 3669e3d..7ca7f25 100644
+--- a/ignition/preparation/runtime_package.py
++++ b/ignition/preparation/runtime_package.py
+@@ -203,6 +203,11 @@ def export_model(prepared, images, storage, path, *, options, progress=None, pub
+     allocations.extend(Allocation(f"host-{index}", region.address, region.extent, alignment=4096,
+         preserve_address=True, memory="mapped_host") for index, region in enumerate(storage.host_regions)
+         if not region.closed)
++    # TP3 merged expert banks: one allocation per bank; Helios maps its first <device bytes> as VRAM
++    # and the rest as pinned host-NUMA memory, so the bank stays one contiguous range.
++    for index, region in enumerate(r for r in getattr(storage, "mixed_regions", ()) if not r.closed):
++        allocations.append(Allocation(f"mixed-{index}-{region.device_bytes}", region.address, region.extent,
++            alignment=storage.granularity, preserve_address=True))
+     allocations.extend(Allocation(region.name, region.address, region.extent, alignment=storage.granularity,
+         initialize="zero", preserve_address=True, sizing=dict(capacity=region.group,
+         unit_bytes=region.unit_bytes, maximum=region.maximum)) for region in dynamic)
+diff --git a/ignition/recipes/declaration.py b/ignition/recipes/declaration.py
+index 9cb349a..88c658b 100644
+--- a/ignition/recipes/declaration.py
++++ b/ignition/recipes/declaration.py
+@@ -243,6 +243,9 @@ class Recipe:
+     # Preparation overrides for vocabulary and transition projections used only by proposals.
+     draft_head_quantizations: tuple[str, ...] = ()
+     markov_head_quantizations: tuple[str, ...] = ()
++    # Bytes per rank that the recipe parks in device-visible host memory instead of VRAM (e.g. DeepSeek V4.1's
++    # cold experts at TP3), subtracted from the planner's resident-weight estimate. Called with the world size.
++    host_offload_bytes: Callable[[int], int] | None = None
+ 
+     def mixed_shapes(self, concurrency, chunk, speculation):
+         from ignition.components.capacity import mixed_shapes
+@@ -297,8 +300,9 @@ class Recipe:
+         method = None if speculation is None else self.speculative_methods.get(speculation.method)
+         if method is not None and method.draft_bytes is not None:
+             draft_bytes = method.draft_bytes
++        parked = 0 if self.host_offload_bytes is None else self.host_offload_bytes(world_size)
+         return -(-(device_bytes + checkpoint.expansion_bytes - checkpoint.draft_bytes
+-                   + (draft_bytes if learned else 0)) // world_size)
++                   + (draft_bytes if learned else 0)) // world_size) - parked
+ 
+     def live_rows(self, concurrency: int, speculation: Speculation | None) -> int:
+         """Permanently backed null, live, and speculative execution rows."""
+diff --git a/ignition/recipes/deepseek41/bootstrap.py b/ignition/recipes/deepseek41/bootstrap.py
+index 01d03e0..d67c29a 100644
+--- a/ignition/recipes/deepseek41/bootstrap.py
++++ b/ignition/recipes/deepseek41/bootstrap.py
+@@ -6,6 +6,7 @@
+ 
+ import contextlib
+ import hashlib
++import os
+ import json
+ from dataclasses import dataclass, replace
+ from functools import partial
+@@ -87,6 +88,15 @@ def _can_race_contextual_plans(config, signatures, device):
+     return True
+ 
+ 
++def _sampling_defaults(config):
++    """Vocabulary-parallel sampling has no top-p filter: declare top_p fixed at 1 so requests clamp instead of failing."""
++    defaults = RECIPE.sampling_defaults.as_dict()
++    if config.vocabulary_parallel_sampling:
++        defaults["top_p"] = 1.
++        defaults.setdefault("ranges", {})["top_p"] = {"min": 1., "max": 1.}
++    return defaults
++
++
+ @dataclass(frozen=True)
+ class PreparationConfig:
+     collective_tuning: str = "static"
+@@ -255,6 +265,9 @@ def _prepare_speculation_catalog(config, speculation, *, add, buffers, graph_buf
+         buffers["speculative_prefix_limits"] = prefix_limits
+         packed_inputs = tuple(field for field in forward_inputs if field != "query_lengths")
+         packed_inputs += ("speculative_prefix_limits",)
++        # Copied history proposals for `flare run --history-drafts`.
++        buffers.update(speculation.copy_buffers())
++        packed_inputs += speculation.COPY_INPUTS
+         packed_batches = {batch for batch, _ in config.packed_speculative_shapes}
+         proposals = {}
+         for batch, depth in sorted(proposal_shapes(config.max_active, config.draft_tokens), reverse=True):
+@@ -314,9 +327,19 @@ def _collective_runtimes(config, group, device, *, coordinator, package_storage,
+             hidden_size=5120, gather_bytes=gather_bytes, ring=config.roce_ring, ring_open=config.roce_chain, package_storage=package_storage)
+         return runtime, runtime, runtime, runtime if layouts else None, runtime if config.dspark else None
+     ipc = package_storage.peer_storage
+-    collective = create_all_reduce_runtime(group, device, collective_tuning=config.collective_tuning, max_tokens=config.all_reduce_tokens, hidden_size=5120, ipc=ipc)
+-    prefill = create_dma_all_reduce_runtime(group, device,
+-        max_tokens=config.prefill_chunk_size, hidden_size=5120, ipc=ipc)
++    # The DMA all-reduce reduce-scatters the 5120-wide hidden state across ranks, so it needs the world
++    # size to divide 5120. TP3 instead shares ONE PCIe all-reduce runtime, sized for a prefill chunk, between
++    # decode and prefill: graph capture enters only the main collective's capture() context, so a second
++    # runtime's reductions would be captured outside the protocol b12x requires (and could desynchronize).
++    if 5120 % len(config.devices):
++        collective = create_all_reduce_runtime(group, device, collective_tuning=config.collective_tuning,
++            max_tokens=max(config.all_reduce_tokens, config.prefill_chunk_size), hidden_size=5120, ipc=ipc)
++        prefill = collective
++    else:
++        collective = create_all_reduce_runtime(group, device, collective_tuning=config.collective_tuning,
++            max_tokens=config.all_reduce_tokens, hidden_size=5120, ipc=ipc)
++        prefill = create_dma_all_reduce_runtime(group, device,
++            max_tokens=config.prefill_chunk_size, hidden_size=5120, ipc=ipc)
+     _, local_vocab = TensorParallelShard(0, len(config.devices)).padded_partition(129280, alignment=64)
+     vocabulary = create_all_gather_runtime(group, device, max_rows=sample_rows,
+         columns=local_vocab * len(config.devices) * 2, ipc=ipc)
+@@ -344,7 +367,8 @@ def prepare_rank(snapshot, config, *, rank, group, progress=None, package_storag
+                                     expert_scale_compression=config.expert_scale_compression,
+                                     draft_head_quantization=config.draft_head_quantization,
+                                     markov_head_quantization=config.markov_head_quantization,
+-                                    vocabulary_parallel_sampling=config.vocabulary_parallel_sampling)
++                                    vocabulary_parallel_sampling=config.vocabulary_parallel_sampling,
++                                    host_allocator=package_storage.host_allocate)
+         release_unused()
+     if progress is not None:
+         progress("Target head: BF16 checkpoint weights with FP32 accumulation and logits")
+@@ -575,9 +599,17 @@ def prepare_rank(snapshot, config, *, rank, group, progress=None, package_storag
+                 graph_pool=package_storage.graph_pool.id, cache_root=config.kernel_cache,
+                 compile_decoder=config.compile_decoder, warmup_storage=package_storage,
+                 progress=progress)
+-        with phase(progress, "Prepare and tune kernels") as stage, package_storage.transient():
+-            tuning = session.tune(show_progress=progress is not None and rank == 0,
+-                                  console=stage.console, contextual=contextual)
++        # TP3: --joint-tuning compiles race forwards before scratch is released for compilation;
++        # FLARE_DS41_JOINT_HEADROOM_MIB lowers the compile headroom for that phase only.
++        headroom = session.headroom_bytes
++        if contextual is not None and os.environ.get("FLARE_DS41_JOINT_HEADROOM_MIB"):
++            session.headroom_bytes = int(os.environ["FLARE_DS41_JOINT_HEADROOM_MIB"]) << 20
++        try:
++            with phase(progress, "Prepare and tune kernels") as stage, package_storage.transient():
++                tuning = session.tune(show_progress=progress is not None and rank == 0,
++                                      console=stage.console, contextual=contextual)
++        finally:
++            session.headroom_bytes = headroom
+         if contextual is not None and progress is not None:
+             from .contextual_selection import contextual_summary
+ 
+@@ -610,7 +642,7 @@ def prepare_rank(snapshot, config, *, rank, group, progress=None, package_storag
+     if group is not None:
+         torch.distributed.barrier(group=group)
+     free, total = torch.cuda.mem_get_info(device)
+-    assets = {role: {"path": str(path)}
++    assets = {role: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+         for role, path in (("tokenizer", metadata_path / "tokenizer.json"),)}
+     buffers["request_pending_token"] = requests.pending_token
+     server_config = {"identity": identity, "model_id": snapshot.name,
+@@ -618,7 +650,7 @@ def prepare_rank(snapshot, config, *, rank, group, progress=None, package_storag
+         "pages": pages, "state_rows": state_rows, "snapshots": snapshots, "page_tokens": PAGE_TOKENS,
+         "frontend": prepare_frontend(metadata_path, eos_token_ids=[1], prompt_encoder=PromptEncoder.DEEPSEEK_V41,
+             image_profile="deepseek_row_major" if vision_state is not None else None),
+-        "sampling_defaults": RECIPE.sampling_defaults.as_dict(), "assets": assets,
++        "sampling_defaults": _sampling_defaults(config), "assets": assets,
+         "model_contract": prepare_contract(signatures, buffers, pool, image_slots=config.image_concurrency,
+             page_tokens=PAGE_TOKENS, draft_lag=0 if config.dspark else None, rows=None,
+             embedding_tables=range(len(tables.sources)))}
+diff --git a/ignition/recipes/deepseek41/decoder.py b/ignition/recipes/deepseek41/decoder.py
+index 9ef718b..f69bfd0 100644
+--- a/ignition/recipes/deepseek41/decoder.py
++++ b/ignition/recipes/deepseek41/decoder.py
+@@ -6,9 +6,12 @@
+ 
+ from dataclasses import dataclass, fields, is_dataclass, replace
+ 
++import os
++
+ import torch
+ 
+ from ignition.components.collectives import PreparedAllReduce
++from . import probe as _probe
+ from ignition.components.embedding import PreparedEmbedding
+ from ignition.components.expert_overlap import ConcurrentSharedExpert
+ from ignition.components.ring_commit import PreparedRingCommit
+@@ -25,6 +28,9 @@ from .decoder_prefill import PreparedDecoderSuffix
+ from .engram import EngramScratch, PreparedEngram, PreparedTableRequests
+ 
+ 
++# Debug A/B (flare#193): FLARE_DS41_NO_ENGRAM=1 skips the Engram contribution in every captured forward.
++_NO_ENGRAM = os.environ.get("FLARE_DS41_NO_ENGRAM", "") not in ("", "0")
++
+ @dataclass(frozen=True)
+ class Scratch:
+     """BF16 decoder activations and FP32 target vocabulary logits."""
+@@ -146,6 +152,9 @@ class PreparedLayer:
+                  window_metadata=None):
+         s, text = scratch, pool.config.text
+         self.scratch, self.carry = s, carry
++        self.probe_index, self.probe_mode = index, mode
++        if _probe.ENABLED:
++            _probe._state(scratch.residual.device)  # allocate eagerly, outside traced forwards
+         self.metadata = metadata
+         buffers = scratch.buffers if buffers is None else buffers
+         self.image_mask = (buffers.zeros(metadata.token_ids.shape, torch.bool)
+@@ -181,16 +190,37 @@ class PreparedLayer:
+             routed_scaling_factor=text["routed_scaling_factor"], correction_bias=weights.experts.correction,
+             image_correction_bias=weights.experts.vision_correction if self.image_mask is not None else None,
+             image_mask=self.image_mask)
+-        self.experts = PreparedRoutedExperts(s.ffn_hc.normalized, weights.experts.experts, s.router.ids,
++        self.cold_experts = self.hot_map = None
++        if weights.experts.cold is not None:
++            # TP3 expert promotion: hot experts on the GPU, cold experts in host memory. Each bank sees the
++            # router's IDs remapped to its local slots; IDs outside a bank are inactive routes there.
++            self.hot_map, self.cold_map = weights.experts.hot_map, weights.experts.cold_map
++            self.hot_ids = buffers.zeros(tuple(s.router.ids.shape), s.router.ids.dtype)
++            self.cold_ids = buffers.zeros(tuple(s.router.ids.shape), s.router.ids.dtype)
++            self.cold_routed = buffers.zeros(tuple(s.routed.shape), s.routed.dtype)
++            route_ids = self.hot_ids
++        elif weights.experts.hot_map is not None:
++            # Merged bank: one remap from global expert IDs to the bank's hot-first slots.
++            self.hot_map, self.cold_map = weights.experts.hot_map, None
++            self.hot_ids = buffers.zeros(tuple(s.router.ids.shape), s.router.ids.dtype)
++            route_ids = self.hot_ids
++        else:
++            route_ids = s.router.ids
++        self.experts = PreparedRoutedExperts(s.ffn_hc.normalized, weights.experts.experts, route_ids,
+             s.router.weights, s.routed, session=session, name=name + ".experts", workspace=workspace,
+             router_plan=self.router.plan)
++        if weights.experts.cold is not None:
++            self.cold_experts = PreparedRoutedExperts(s.ffn_hc.normalized, weights.experts.cold, self.cold_ids,
++                s.router.weights, self.cold_routed, session=session, name=name + ".cold_experts",
++                workspace=workspace, router_plan=self.router.plan)
+         self.shared = PreparedMLP(s.ffn_hc.normalized, weights.experts.shared, s.shared.gate_up,
+             s.shared.intermediate, s.shared.output, session=session, name=name + ".shared", workspace=workspace,
+             swiglu_limit=text["swiglu_limit"], round_silu=False, activation_mode="auto")
+         self.concurrent_shared = None
+         if mode in ("decode", "verify", "draft") and s.ffn_hc.normalized.shape[0] <= 128 and workspace.overlap:
+             self.concurrent_shared = ConcurrentSharedExpert(self.shared,
+-                parallel_plans=(self.router_projection.plan, self.router.plan, self.experts.plan),
++                parallel_plans=(self.router_projection.plan, self.router.plan, self.experts.plan,
++                                *(() if self.cold_experts is None else (self.cold_experts.plan,))),
+                 session=session, workspace=workspace,
+                 defer_launch=s.ffn_hc.normalized.shape[0] > 4)
+         self.mlp_reduce = PreparedAllReduce(s.mlp_partial, s.mlp_output, runtime=runtime,
+@@ -200,30 +230,53 @@ class PreparedLayer:
+ 
+     def __call__(self):
+         s = self.scratch
+-        if self.engram is not None:
++        if self.engram is not None and _NO_ENGRAM:
++            # Debug A/B (flare#193): keep the Engram handshake (readiness wait, lookup, timestamps) but
++            # discard its contribution, so only Engram's effect on the residual is removed.
++            source = self.engram(s.residual)
++            source.copy_(s.residual)
++        elif self.engram is not None:
+             source = self.engram(s.residual)
+         else:
+             source = s.residual
+         incoming = ((s.mlp_output, s.ffn_hc.residual, s.ffn_hc.post, s.ffn_hc.comb)
+                     if self.carry else (source,))
++        _probe.record(source, self.probe_index, 0, self.probe_mode)
+         if self.boundary is None:
+             self.attention_hc(*incoming)
+         else:
+             self.boundary(self.attention.selectors[0])
+         self.attention_reduce(self.attention(s.attention_hc.normalized))
++        _probe.record(s.attention_output, self.probe_index, 1, self.probe_mode)
+         self.ffn_hc(s.attention_output, s.attention_hc.residual, s.attention_hc.post, s.attention_hc.comb)
+         if self.concurrent_shared is not None:
+             self.concurrent_shared.start(s.ffn_hc.normalized)
+         if self.image_mask is not None:
+             self.image_mask.copy_(self.metadata.token_ids >= 129280)
+         self.router(self.router_projection(s.ffn_hc.normalized))
++        _probe.router(s.router.ids, s.router.weights, self.probe_index, self.probe_mode)
++        _probe.full(s.ffn_hc.normalized, self.probe_index, "in", self.probe_mode)
++        if self.cold_experts is not None:
++            flat = s.router.ids.reshape(-1)
++            torch.index_select(self.hot_map, 0, flat, out=self.hot_ids.view(-1))
++            torch.index_select(self.cold_map, 0, flat, out=self.cold_ids.view(-1))
++        elif self.hot_map is not None:
++            torch.index_select(self.hot_map, 0, s.router.ids.reshape(-1), out=self.hot_ids.view(-1))
+         self.experts()
++        if self.cold_experts is not None:
++            self.cold_experts()
++            s.routed.add_(self.cold_routed)
++        _probe.full(s.routed, self.probe_index, "out", self.probe_mode)
+         if self.concurrent_shared is None:
+             self.shared(s.ffn_hc.normalized)
+         else:
+             self.concurrent_shared.finish(s.ffn_hc.normalized, s.routed)
++        _probe.record(s.routed, self.probe_index, 3, self.probe_mode)
++        _probe.record(s.shared.output, self.probe_index, 4, self.probe_mode)
+         torch.add(s.routed, s.shared.output, out=s.mlp_partial)
++        _probe.record(s.mlp_partial, self.probe_index, 5, self.probe_mode)
+         self.mlp_reduce(s.mlp_partial)
++        _probe.record(s.mlp_output, self.probe_index, 2, self.probe_mode)
+         if self.post is not None:
+             self.post(s.mlp_output, s.ffn_hc.residual, s.ffn_hc.post, s.ffn_hc.comb)
+ 
+@@ -333,6 +386,8 @@ class PreparedDecoder:
+ 
+     def __call__(self):
+         s, m = self.scratch, self.metadata
++        _probe.step(s.residual.device, self.mode)
++        _probe.positions(m.positions, self.mode)
+         self.table_requests()
+         if self.vision is not None:
+             self.safe_tokens.copy_(m.token_ids.clamp(0, self.weights.embedding.shape[0] - 1))
+diff --git a/ignition/recipes/deepseek41/engram.py b/ignition/recipes/deepseek41/engram.py
+index bed319b..911c78a 100644
+--- a/ignition/recipes/deepseek41/engram.py
++++ b/ignition/recipes/deepseek41/engram.py
+@@ -32,6 +32,7 @@ class Tables:
+     shard: object
+     columns: torch.Tensor
+     readiness_runtime: object = None
++    packed_fp4: bool = False
+ 
+     @classmethod
+     def prepare(cls, manifest, config, *, tokens, device, sequence, frame, host_allocator, progress=None, shard=None):
+@@ -50,25 +51,35 @@ class Tables:
+         if geometry.num_embeddings != tuple(text["engram_num_embeddings"]):
+             raise ValueError("Engram hash geometry differs from checkpoint tables")
+         sources, inputs, mailboxes = {}, {}, {}
++        packed_fp4 = None
+         timings = ReadinessTimings.allocate(frame, len(geometry.layer_ids))
+         with phase(progress, "Prepare embedding tables") as stage:
+             for index, layer in enumerate(geometry.layer_ids):
+                 rows = geometry.num_embeddings[index]
+                 pair = []
+-                for suffix, columns, dtype in (("weight", 256, "F8_E4M3"), ("scale", 8, "F8_E8M0")):
++                # FP8 E4M3 rows (stock checkpoint) or packed MXFP4 E2M1 rows (engram-nvidia checkpoint).
++                weight = manifest.tensors[f"layers.{layer}.engram.embed.weight"]
++                packed = weight.dtype == "U8" and weight.shape == (rows, 128)
++                if packed_fp4 is None:
++                    packed_fp4 = packed
++                elif packed_fp4 != packed:
++                    raise ValueError("Engram tables mix FP8 and MXFP4 rows")
++                for suffix, columns, dtype in (("weight", 128 if packed else 256, "U8" if packed else "F8_E4M3"),
++                                               ("scale", 8, "F8_E8M0")):
+                     name = f"layers.{layer}.engram.embed.{suffix}"
+                     metadata = manifest.tensors[name]
+                     if metadata.shape != (rows, columns) or metadata.dtype != dtype:
+                         raise ValueError(f"{name}: invalid Engram table geometry or dtype")
+                     pair.append(FileSource(manifest.snapshot / metadata.shard, metadata.offset, rows * columns))
+                 sources[layer] = tuple(pair)
+-                inputs[layer] = EngramInputs.allocate(tokens, device, timings=timings, interval=index)
++                inputs[layer] = EngramInputs.allocate(tokens, device, timings=timings, interval=index, packed_fp4=packed)
+                 mailboxes[layer] = host_allocator(f"engram_{layer}_requests", (tokens * 24 + 1,), torch.int64)
+                 mailboxes[layer].host_view.zero_()
+             stage.update(f"{sum(source.nbytes for pair in sources.values() for source in pair) / (1 << 30):.1f} GiB in checkpoint spans")
+         columns = torch.tensor([head * 256 + column for head in range(shard.rank, 24, shard.world_size)
+                                 for column in range(256)], dtype=torch.int64, device=device)
+-        return cls(geometry, tuple(token_map), sources, inputs, mailboxes, sequence, shard, columns)
++        return cls(geometry, tuple(token_map), sources, inputs, mailboxes, sequence, shard, columns,
++                   packed_fp4=bool(packed_fp4))
+ 
+     def buffers(self):
+         return {**{name: tensor for layer, inputs in self.inputs.items() for name, tensor in inputs.buffers(layer).items()},
+@@ -84,7 +95,7 @@ class Tables:
+             {"planes": [{"segments": [
+                             {"path": str(source.path), "offset": source.offset, "nbytes": source.nbytes}],
+                          "row_bytes": row_bytes}
+-                        for source, row_bytes in zip(self.sources[layer], (256, 8), strict=True)],
++                        for source, row_bytes in zip(self.sources[layer], (128 if self.packed_fp4 else 256, 8), strict=True)],
+              "heads": 24, "weights": f"engram_{layer}_weights", "scales": f"engram_{layer}_scales",
+              "hashes": f"engram_{layer}_hashes", "event": f"engram_{layer}_ready",
+              "request": f"engram_{layer}_requests"}
+@@ -95,7 +106,8 @@ class Tables:
+         tables = []
+         for ordinal, layer in enumerate(self.geometry.layer_ids):
+             table = dict(layer=layer, rows=self.geometry.num_embeddings[ordinal],
+-                embedding_width=256, scale_block=32, encoding="FP8_E4M3_E8M0",
++                embedding_width=256, scale_block=32,
++                encoding="MXFP4_E2M1_E8M0" if self.packed_fp4 else "FP8_E4M3_E8M0",
+                 weight_buffer=f"engram_{layer}_weights", scale_buffer=f"engram_{layer}_scales",
+                 hash_buffer=f"engram_{layer}_hashes", ready_event=f"engram_{layer}_ready",
+                 request_buffer=f"engram_{layer}_requests")
+diff --git a/ignition/recipes/deepseek41/probe.py b/ignition/recipes/deepseek41/probe.py
+new file mode 100644
+index 0000000..00a3d54
+--- /dev/null
++++ b/ignition/recipes/deepseek41/probe.py
+@@ -0,0 +1,171 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Debug-only per-layer residual probes for the DeepSeek decode-corruption hunt (flare#193).
++
++Enabled by FLARE_DS41_PROBE=1 (debug-serve only; never export with it). Each captured forward records
++four statistics (sum, sum of squares, max |x|, first element) per probed tensor:
++
++  * decode graphs: row 0, into a ring buffer indexed by a device-side decode step counter;
++  * prefill graphs: every row, into a prefill table (overwritten by each prefill chunk).
++
++Rank 0 dumps the buffers to /tmp/flare_probe.pt whenever /tmp/flare_probe_req exists.
++"""
++
++import os
++import threading
++import time
++
++import torch
++
++ENABLED = os.environ.get("FLARE_DS41_PROBE", "") not in ("", "0")
++RING, LAYERS, STAGES, PREFILL_ROWS = 512, 40, 6, 4096
++FULL_LAYERS = (37, 38, 39)  # full-row captures of the MoE input and routed output (bf16)
++_STATE = {}
++
++
++def _state(device):
++    key = torch.device(device).index
++    if key not in _STATE:
++        state = {
++            "ring": torch.zeros((RING, LAYERS, STAGES, 4), dtype=torch.float32, device=device),
++            "counter": torch.zeros((1,), dtype=torch.int64, device=device),
++            "prefill": torch.zeros((PREFILL_ROWS, LAYERS, STAGES, 4), dtype=torch.float32, device=device),
++            "prefill_rows": torch.zeros((1,), dtype=torch.int64, device=device),
++            "ring_pos": torch.full((RING,), -1, dtype=torch.int64, device=device),
++            "prefill_pos": torch.full((PREFILL_ROWS,), -1, dtype=torch.int64, device=device),
++            "ring_ids": torch.full((RING, LAYERS, 6), -1, dtype=torch.int32, device=device),
++            "ring_w": torch.zeros((RING, LAYERS, 6), dtype=torch.float32, device=device),
++            "prefill_ids": torch.full((PREFILL_ROWS, LAYERS, 6), -1, dtype=torch.int32, device=device),
++            "prefill_w": torch.zeros((PREFILL_ROWS, LAYERS, 6), dtype=torch.float32, device=device),
++            "ring_in": torch.zeros((RING, len(FULL_LAYERS), 5120), dtype=torch.bfloat16, device=device),
++            "ring_out": torch.zeros((RING, len(FULL_LAYERS), 5120), dtype=torch.bfloat16, device=device),
++            "prefill_in": torch.zeros((PREFILL_ROWS, len(FULL_LAYERS), 5120), dtype=torch.bfloat16, device=device),
++            "prefill_out": torch.zeros((PREFILL_ROWS, len(FULL_LAYERS), 5120), dtype=torch.bfloat16, device=device),
++        }
++        _STATE[key] = state
++        if key == 0:
++            threading.Thread(target=_dumper, args=(state,), daemon=True).start()
++    return _STATE[key]
++
++
++def _dumper(state):
++    while True:
++        if os.path.exists("/tmp/flare_probe_req"):
++            try:
++                torch.save({name: value.detach().cpu() for name, value in state.items()}, "/tmp/flare_probe.pt.tmp")
++                os.replace("/tmp/flare_probe.pt.tmp", "/tmp/flare_probe.pt")
++            finally:
++                os.remove("/tmp/flare_probe_req")
++        time.sleep(0.2)
++
++
++@torch.library.custom_op("flare_debug::probe_step", mutates_args=("counter",))
++def _probe_step(counter: torch.Tensor) -> None:
++    counter.add_(1)
++
++
++@_probe_step.register_fake
++def _probe_step_fake(counter):
++    pass
++
++
++@torch.library.custom_op("flare_debug::probe_record", mutates_args=("ring", "prefill", "prefill_rows"))
++def _probe_record(value: torch.Tensor, ring: torch.Tensor, prefill: torch.Tensor, prefill_rows: torch.Tensor,
++                  counter: torch.Tensor, layer: int, stage: int, decode: bool) -> None:
++    rows = value.shape[0]
++    flat = value.reshape(rows, -1).float()
++    stats = torch.stack((flat.sum(1), (flat * flat).sum(1), flat.abs().amax(1), flat[:, 0]), dim=1)
++    if decode:
++        slot = torch.remainder(counter, RING)
++        ring[:, layer, stage].index_copy_(0, slot, stats[:1])
++    else:
++        count = min(rows, PREFILL_ROWS)
++        prefill[:count, layer, stage].copy_(stats[:count])
++        prefill_rows.fill_(rows)
++
++
++@_probe_record.register_fake
++def _probe_record_fake(value, ring, prefill, prefill_rows, counter, layer, stage, decode):
++    pass
++
++
++@torch.library.custom_op("flare_debug::probe_positions", mutates_args=("ring_pos", "prefill_pos"))
++def _probe_positions(positions: torch.Tensor, ring_pos: torch.Tensor, prefill_pos: torch.Tensor,
++                     counter: torch.Tensor, decode: bool) -> None:
++    if decode:
++        ring_pos.index_copy_(0, torch.remainder(counter, RING), positions[:1].long())
++    else:
++        count = min(positions.shape[0], PREFILL_ROWS)
++        prefill_pos[:count].copy_(positions[:count].long())
++
++
++@_probe_positions.register_fake
++def _probe_positions_fake(positions, ring_pos, prefill_pos, counter, decode):
++    pass
++
++
++def positions(value, mode):
++    if ENABLED and mode in ("decode", "prefill"):
++        state = _state(value.device)
++        _probe_positions(value.reshape(-1), state["ring_pos"], state["prefill_pos"], state["counter"], mode == "decode")
++
++
++@torch.library.custom_op("flare_debug::probe_router",
++                         mutates_args=("ring_ids", "ring_w", "prefill_ids", "prefill_w"))
++def _probe_router(ids: torch.Tensor, weights: torch.Tensor, ring_ids: torch.Tensor, ring_w: torch.Tensor,
++                  prefill_ids: torch.Tensor, prefill_w: torch.Tensor, counter: torch.Tensor, layer: int,
++                  decode: bool) -> None:
++    if decode:
++        slot = torch.remainder(counter, RING)
++        ring_ids[:, layer].index_copy_(0, slot, ids[:1].int())
++        ring_w[:, layer].index_copy_(0, slot, weights[:1].float())
++    else:
++        count = min(ids.shape[0], PREFILL_ROWS)
++        prefill_ids[:count, layer].copy_(ids[:count].int())
++        prefill_w[:count, layer].copy_(weights[:count].float())
++
++
++@_probe_router.register_fake
++def _probe_router_fake(ids, weights, ring_ids, ring_w, prefill_ids, prefill_w, counter, layer, decode):
++    pass
++
++
++def router(ids, weights, layer, mode):
++    if ENABLED and mode in ("decode", "prefill") and ids.shape[-1] == 6:
++        state = _state(ids.device)
++        _probe_router(ids, weights, state["ring_ids"], state["ring_w"], state["prefill_ids"], state["prefill_w"],
++                      state["counter"], layer, mode == "decode")
++
++
++@torch.library.custom_op("flare_debug::probe_full", mutates_args=("ring", "prefill"))
++def _probe_full(value: torch.Tensor, ring: torch.Tensor, prefill: torch.Tensor, counter: torch.Tensor,
++                index: int, decode: bool) -> None:
++    rows = value.reshape(value.shape[0], -1)
++    if decode:
++        ring[:, index].index_copy_(0, torch.remainder(counter, RING), rows[:1].to(ring.dtype))
++    else:
++        count = min(rows.shape[0], PREFILL_ROWS)
++        prefill[:count, index].copy_(rows[:count].to(prefill.dtype))
++
++
++@_probe_full.register_fake
++def _probe_full_fake(value, ring, prefill, counter, index, decode):
++    pass
++
++
++def full(value, layer, kind, mode):
++    if ENABLED and mode in ("decode", "prefill") and layer in FULL_LAYERS and value.reshape(value.shape[0], -1).shape[1] == 5120:
++        state = _state(value.device)
++        _probe_full(value, state["ring_" + kind], state["prefill_" + kind], state["counter"],
++                    FULL_LAYERS.index(layer), mode == "decode")
++
++
++def step(device, mode):
++    if ENABLED and mode == "decode":
++        _probe_step(_state(device)["counter"])
++
++
++def record(value, layer, stage, mode):
++    if ENABLED and mode in ("decode", "prefill"):
++        state = _state(value.device)
++        _probe_record(value, state["ring"], state["prefill"], state["prefill_rows"], state["counter"],
++                      layer, stage, mode == "decode")
+diff --git a/ignition/recipes/deepseek41/recipe.py b/ignition/recipes/deepseek41/recipe.py
+index 5d085e7..626a5a6 100644
+--- a/ignition/recipes/deepseek41/recipe.py
++++ b/ignition/recipes/deepseek41/recipe.py
+@@ -4,6 +4,7 @@
+ 
+ """DeepSeek V4.1 Flash checkpoint and tensor-parallel memory geometry."""
+ 
++import os
+ from types import MappingProxyType
+ 
+ from ignition.planning import HEADROOM_BYTES
+@@ -48,6 +49,31 @@ def usage(prepared):
+     return tuple(RankUsage(rank["pages"], rank["free_device_bytes"]) for rank in prepared.memory_report["ranks"])
+ 
+ 
++def _parked_bytes(world: int) -> int:
++    """Routed-expert bytes per rank parked in host memory (FLARE_DS41_HOST_EXPERT_LAYERS / FLARE_DS41_HOT_EXPERTS)."""
++    from .weights import global_cold_plan, host_expert_layers
++    local = -(-2304 // world)  # routed-expert intermediate width per rank
++    per_expert = 2 * local * 5120 // 2 + 5120 * local // 2           # MXFP4 w13 + w2 bytes (scales stay on GPU)
++    plan = global_cold_plan()
++    if plan is not None:
++        return sum(len(cold) for cold in plan.values()) * per_expert
++    layers = host_expert_layers()
++    if not layers:
++        return 0
++    hot = int(os.environ.get("FLARE_DS41_HOT_EXPERTS", "0") or 0)
++    cold = 384 - min(max(hot, 0), 384)
++    local = -(-2304 // world)  # routed-expert intermediate width per rank
++    per_expert = 2 * local * 5120 // 2 + 5120 * local // 2           # MXFP4 w13 + w2 bytes (scales stay on GPU)
++    return len(layers) * cold * per_expert
++
++
++def _graph_bytes(world: int) -> int:
++    """Per-rank captured-graph estimate; TP3 may be overridden for 96 GB GPUs."""
++    if world == 3 and os.environ.get("FLARE_DS41_TP3_GRAPH_GIB"):
++        return int(float(os.environ["FLARE_DS41_TP3_GRAPH_GIB"]) * (1 << 30))
++    return 8 << 30
++
++
+ RECIPE = Recipe(
+     name="deepseek41", served_model_name="DeepSeek-V4.1-Flash", prepare=prepare, usage=usage,
+     mla_compute_modes=("auto", "bf16"), mla_compute_mode="bf16", expert_scale_compression="csf",
+@@ -68,6 +94,9 @@ RECIPE = Recipe(
+     max_draft_tokens=7, max_images=4, image_bytes=32 << 20,
+     # Single-row decode runs the shared expert on an auxiliary stream.
+     stream_overlap=True,
+-    ranks=MappingProxyType({world: RankCosts(3_043_840, 113_920, 8 << 30) for world in (3, 4)}),
+-    plain_ranks=MappingProxyType({world: RankCosts(2_841_088, 113_920, 8 << 30) for world in (3, 4)}),
++    host_offload_bytes=_parked_bytes,
++    # TP3 on 96 GB SM120: the shared 8 GiB graph estimate leaves no room for 92.5 GiB of TP3 weights;
++    # FLARE_DS41_TP3_GRAPH_GIB overrides the TP3 graph estimate (measured value goes here once known).
++    ranks=MappingProxyType({world: RankCosts(3_043_840, 113_920, _graph_bytes(world)) for world in (3, 4)}),
++    plain_ranks=MappingProxyType({world: RankCosts(2_841_088, 113_920, _graph_bytes(world)) for world in (3, 4)}),
+ )
+diff --git a/ignition/recipes/deepseek41/weights.py b/ignition/recipes/deepseek41/weights.py
+index c58db2c..7e1d5fd 100644
+--- a/ignition/recipes/deepseek41/weights.py
++++ b/ignition/recipes/deepseek41/weights.py
+@@ -6,6 +6,7 @@
+ 
+ from dataclasses import dataclass, replace
+ 
++import os
+ import torch
+ 
+ from ignition.components.weights import MLPWeights
+@@ -23,6 +24,12 @@ class ExpertWeights:
+     experts: object
+     shared: MLPWeights
+     vision_correction: torch.Tensor | None = None
++    # TP3 expert promotion: a parked layer keeps its hottest experts on the GPU (`experts`) and the rest in
++    # device-visible host memory (`cold`). The maps translate global router IDs to each bank's local slot
++    # (-1 = not in this bank, which the b12x W4A8 kernels treat as an inactive route).
++    cold: object = None
++    hot_map: torch.Tensor | None = None
++    cold_map: torch.Tensor | None = None
+ 
+ 
+ @dataclass(frozen=True)
+@@ -73,11 +80,12 @@ class ModelWeights:
+     @classmethod
+     def load(cls, manifest, device, *, shard, progress=None, dspark=False, confidence=False,
+              expert_scale_compression=None, draft_head_quantization=None, markov_head_quantization=None,
+-             vocabulary_parallel_sampling=False):
++             vocabulary_parallel_sampling=False, host_allocator=None):
+         config = ModelConfig.load(manifest.metadata_path)
+         before = torch.cuda.memory_allocated(device)
+         with DeepSeekWeightLoader(manifest, device, shard=shard, progress=progress, dspark=dspark,
+-                                 expert_scale_compression=expert_scale_compression) as loader:
++                                 expert_scale_compression=expert_scale_compression,
++                                 host_allocator=host_allocator) as loader:
+             embedding, norm = loader.load_tensors(("embed.weight", "norm.weight"))
+             head = loader.load_padded_tensor("head.weight", rows=shard.padded_partition(129280, alignment=64))
+             layers = tuple(loader.load_layer(i) for i in range(config.layers))
+@@ -105,9 +113,78 @@ class ModelWeights:
+                    torch.cuda.memory_allocated(device) - before, vision)
+ 
+ 
++def hot_expert_ids(layer: int, experts: int) -> list | None:
++    """TP3 expert promotion: the FLARE_DS41_HOT_EXPERTS hottest experts of a parked layer, by the route counts in
++    FLARE_DS41_EXPERT_COUNTS_DIR/expert-routes-rank0-layer{L}.json (vLLM route-monitor format). None = park all."""
++    plan = global_cold_plan()
++    if plan is not None:
++        cold = plan.get(layer, frozenset())
++        return [e for e in range(experts) if e not in cold] if cold else None
++    hot = int(os.environ.get("FLARE_DS41_HOT_EXPERTS", "0") or 0)
++    if hot <= 0:
++        return None
++    if hot >= experts:
++        return list(range(experts))
++    import json
++    from pathlib import Path
++    path = Path(os.environ["FLARE_DS41_EXPERT_COUNTS_DIR"]) / f"expert-routes-rank0-layer{layer}.json"
++    counts = json.loads(path.read_text())["counts"]
++    if len(counts) != experts:
++        raise ValueError(f"{path}: expected {experts} expert counts, got {len(counts)}")
++    order = sorted(range(experts), key=lambda e: (-counts[e], e))
++    return sorted(order[:hot])
++
++
++_GLOBAL_PLAN = {}
++
++
++def global_cold_plan() -> dict | None:
++    """FLARE_DS41_GLOBAL_COLD=N: the N least-routed (layer, expert) pairs across all MoE layers live in host
++    memory (merged banks); every other expert stays in VRAM. Route counts as for FLARE_DS41_HOT_EXPERTS.
++    Returns {layer: frozenset(cold experts)}."""
++    budget = int(os.environ.get("FLARE_DS41_GLOBAL_COLD", "0") or 0)
++    if budget <= 0:
++        return None
++    if budget not in _GLOBAL_PLAN:
++        import json
++        from pathlib import Path
++        root = Path(os.environ["FLARE_DS41_EXPERT_COUNTS_DIR"])
++        pairs = []
++        for path in sorted(root.glob("expert-routes-rank0-layer*.json")):
++            layer = int(path.stem.rsplit("layer", 1)[1])
++            counts = json.loads(path.read_text())["counts"]
++            total = sum(counts) or 1
++            pairs.extend((count / total, layer, expert) for expert, count in enumerate(counts))
++        pairs.sort()
++        plan = {}
++        for _, layer, expert in pairs[:budget]:
++            plan.setdefault(layer, set()).add(expert)
++        _GLOBAL_PLAN[budget] = {layer: frozenset(cold) for layer, cold in plan.items()}
++    return _GLOBAL_PLAN[budget]
++
++
++def merged_bank() -> bool:
++    """FLARE_DS41_MERGED_BANK=1: parked layers use one mixed VRAM/host bank instead of hot + cold banks."""
++    return os.environ.get("FLARE_DS41_MERGED_BANK", "0") == "1"
++
++
++def host_expert_layers() -> frozenset:
++    """TP3 expert parking: FLARE_DS41_HOST_EXPERT_LAYERS="20-22" or "20,21" parks those MoE layers'
++    routed-expert banks in device-visible host memory (read over PCIe when routed)."""
++    plan = global_cold_plan()
++    if plan is not None:
++        return frozenset(plan)
++    spec = os.environ.get("FLARE_DS41_HOST_EXPERT_LAYERS", "").strip()
++    layers = set()
++    for part in filter(None, (p.strip() for p in spec.split(","))):
++        a, _, b = part.partition("-")
++        layers.update(range(int(a), int(b or a) + 1))
++    return frozenset(layers)
++
++
+ class DeepSeekWeightLoader(BlockFP8WeightLoader):
+     def __init__(self, manifest, device, *, shard, progress=None, prefixes=None, dspark=False,
+-                 expert_scale_compression=None):
++                 expert_scale_compression=None, host_allocator=None):
+         if expert_scale_compression not in (None, "csf"):
+             raise ValueError("DeepSeek V4.1 expert scale compression must be None or 'csf'")
+         self.dspark = dspark
+@@ -116,13 +193,16 @@ class DeepSeekWeightLoader(BlockFP8WeightLoader):
+         self.config = ModelConfig.load(manifest.metadata_path)
+         self.shard = shard
+         self._expert_scale_scratch = {}
++        self._host_allocator = host_allocator
++        self._host_layers = host_expert_layers() if host_allocator is not None else frozenset()
+ 
+-    def load_experts(self, prefixes, interval):
++    def load_experts(self, prefixes, interval, *, host=False):
+         text = self.config.text
+         return self.load_mxfp4_experts(prefixes, hidden_size=text["hidden_size"],
+             intermediate_size=text["moe_intermediate_size"], intermediate_range=interval,
+             swiglu_limit=text["swiglu_limit"], scale_name="scale", projection_names=("w3", "w1", "w2"),
+-            scale_compression=self.expert_scale_compression, scale_scratch=self._expert_scale_scratch)
++            scale_compression=self.expert_scale_compression, scale_scratch=self._expert_scale_scratch,
++            host_allocator=self._host_allocator if host else None)
+ 
+     def _selected_names(self):
+         return {name for name in super()._selected_names()
+@@ -162,14 +242,44 @@ class DeepSeekWeightLoader(BlockFP8WeightLoader):
+             result["index_weights"] = self.load_tensor(attn + ".indexer.weights_proj.weight")
+         ffn = prefix + ".ffn"
+         interval = shard.partition(text["moe_intermediate_size"], alignment=32)
+-        experts = self.load_experts(
+-            [f"{ffn}.experts.{i}" for i in range(self.config.draft.experts if draft else text["n_routed_experts"])],
+-            interval)
++        count = self.config.draft.experts if draft else text["n_routed_experts"]
++        parked = not draft and layer in self._host_layers
++        hot = hot_expert_ids(layer, count) if parked else None
++        cold = hot_map = cold_map = None
++        if hot is None or len(hot) == count:
++            experts = self.load_experts([f"{ffn}.experts.{i}" for i in range(count)], interval,
++                                        host=parked and hot is None)
++        elif merged_bank() and getattr(self._host_allocator, "__self__", None) is not None:
++            # One bank, hot experts first: VRAM rows for hot, host rows for cold (one MoE call per layer).
++            storage = self._host_allocator.__self__
++            hot_set = set(hot)
++            order = list(hot) + [e for e in range(count) if e not in hot_set]
++            host_allocator = self._host_allocator
++            self._host_allocator = lambda name, shape, dtype: storage.mixed_allocate(
++                name, shape, dtype, device_rows=len(hot))
++            try:
++                experts = self.load_experts([f"{ffn}.experts.{i}" for i in order], interval, host=True)
++            finally:
++                self._host_allocator = host_allocator
++            hot_map = torch.empty((count,), dtype=torch.int32)
++            hot_map[order] = torch.arange(count, dtype=torch.int32)
++            hot_map = hot_map.to(self.device)
++        else:
++            hot_set = set(hot)
++            cold_ids = [e for e in range(count) if e not in hot_set]
++            experts = self.load_experts([f"{ffn}.experts.{i}" for i in hot], interval, host=False)
++            cold = self.load_experts([f"{ffn}.experts.{i}" for i in cold_ids], interval, host=True)
++            hot_map = torch.full((count,), -1, dtype=torch.int32)
++            hot_map[hot] = torch.arange(len(hot), dtype=torch.int32)
++            cold_map = torch.full((count,), -1, dtype=torch.int32)
++            cold_map[cold_ids] = torch.arange(len(cold_ids), dtype=torch.int32)
++            hot_map, cold_map = hot_map.to(self.device), cold_map.to(self.device)
+         shared = MLPWeights(self.load_linear_group((ffn + ".shared_experts.w1", ffn + ".shared_experts.w3"),
+             row_ranges=(interval, interval)), self.load_linear(ffn + ".shared_experts.w2", columns=interval))
+         routed = ExpertWeights(self.load_tensor(ffn + ".gate.weight"),
+             self.load_tensor(ffn + ".gate.bias"), experts, shared,
+-            self.load_tensor(ffn + ".gate.bias_vl") if self.config.vision is not None else None)
++            self.load_tensor(ffn + ".gate.bias_vl") if self.config.vision is not None else None,
++            cold=cold, hot_map=hot_map, cold_map=cold_map)
+         residual = {name: self.load_tensor(prefix + "." + name) for name in (
+             "hc_attn_fn", "hc_attn_base", "hc_attn_scale", "hc_ffn_fn", "hc_ffn_base", "hc_ffn_scale",
+             "attn_norm.weight", "ffn_norm.weight")}
+diff --git a/tests/components/test_vocabulary_cuda.py b/tests/components/test_vocabulary_cuda.py
+index 0b27669..63b5666 100644
+--- a/tests/components/test_vocabulary_cuda.py
++++ b/tests/components/test_vocabulary_cuda.py
+@@ -57,7 +57,7 @@ def _rank(rank, world, rendezvous, vocab, indexed=False, output_dtype=torch.bflo
+     try:
+         with RecordedPreparationSession(device=device, checkpoint="vocabulary-test",
+                 workload_schema="column-gather-v1", numerical_policy="default", coordinator=coordinator,
+-                compile_workers=2) as session:
++                compile_workers=max(2, world)) as session:
+             for rows in (4, 1):
+                 result = output if indexed else output[:rows]
+                 heads[rows] = PreparedVocabularyProjection(source[:rows], weight, local[:rows], result,
+@@ -126,7 +126,7 @@ def _rank(rank, world, rendezvous, vocab, indexed=False, output_dtype=torch.bflo
+         dist.destroy_process_group()
+ 
+ 
+-@pytest.mark.parametrize("world", [2, 4])
++@pytest.mark.parametrize("world", [2, 3, 4])
+ @pytest.mark.parametrize("vocab", [154880, 128896])
+ def test_sharded_vocabulary_native_replay(world, vocab, tmp_path):
+     assert os.environ.get("CUDA_VISIBLE_DEVICES")
+@@ -150,7 +150,7 @@ def test_fp32_vocabulary_expands_rows_after_gather_under_native_replay(tmp_path)
+              nprocs=2, join=True)
+ 
+ 
+-@pytest.mark.parametrize("world", [2, 4])
++@pytest.mark.parametrize("world", [2, 3, 4])
+ @torch.no_grad()
+ def test_quantized_draft_shards_preserve_logits_under_compiled_replay(world):
+     from b12x.preparation import PreparationSession
+diff --git a/tests/components/test_vocabulary_gather_stress_cuda.py b/tests/components/test_vocabulary_gather_stress_cuda.py
+new file mode 100644
+index 0000000..4afc937
+--- /dev/null
++++ b/tests/components/test_vocabulary_gather_stress_cuda.py
+@@ -0,0 +1,205 @@
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-FileCopyrightText: Copyright (c) 2026 Flare community contributors
++# SPDX-License-Identifier: Apache-2.0
++
++"""STRESS: per-replay checked sharded vocabulary gather (TP3 race hunt)."""
++
++import os
++import time
++from datetime import timedelta
++
++import pytest
++import torch
++import torch.distributed as dist
++import torch.multiprocessing as mp
++
++pytestmark = pytest.mark.skipif(os.environ.get("FLARE_RUN_TP_CUDA_TESTS") != "1",
++    reason="requires explicitly assigned CUDA devices and FLARE_RUN_TP_CUDA_TESTS=1")
++
++
++@torch.no_grad()
++def _rank(rank, world, rendezvous, vocab, indexed=False, output_dtype=torch.bfloat16):
++    from ignition.components.vocabulary import PreparedVocabularyProjection
++    from ignition.preparation.collectives import (
++        CollectivePreparation,
++        create_all_gather_runtime,
++    )
++    from ignition.preparation.compilation import compile_forward
++    from ignition.preparation.execution import GraphSignature, PreparedExecution
++    from ignition.preparation.tuning import RecordedPreparationSession
++
++    torch.cuda.set_device(rank)
++    device = torch.device("cuda", rank)
++    dist.init_process_group("gloo", init_method=rendezvous, rank=rank, world_size=world,
++                            timeout=timedelta(minutes=2))
++    group = dist.group.WORLD
++    coordinator = CollectivePreparation(group)
++    hidden, capacity = 256, 4
++    width = (vocab + world * 64 - 1) // (world * 64) * 64
++    torch.manual_seed(42)
++    full_weight = torch.randn(vocab, hidden, dtype=torch.bfloat16, device=device) * .0625
++    weight = torch.zeros(width, hidden, dtype=torch.bfloat16, device=device)
++    valid_columns = min(width, vocab - rank * width)
++    weight[:valid_columns].copy_(full_weight[rank * width:rank * width + valid_columns])
++    seed = torch.randn(capacity, hidden, dtype=torch.bfloat16, device=device) * .125
++    source = seed.clone()
++    local = torch.empty(capacity, width, dtype=output_dtype, device=device)
++    sample_capacity = 2 * capacity if indexed else capacity
++    output = torch.empty(sample_capacity, vocab, dtype=output_dtype, device=device)
++    indices = torch.zeros(sample_capacity, dtype=torch.int64, device=device) if indexed else None
++    runtime = create_all_gather_runtime(group, device, max_rows=capacity,
++        columns=width * world * (output.element_size() // 2))
++    graphs, heads, compiled = {}, {}, {}
++    control = {"frame_index": torch.zeros(1, dtype=torch.int32, device=device),
++               "submission_sequence": torch.zeros(1, dtype=torch.int64, device=device),
++               "completion_records": torch.zeros((2, 4, 32), dtype=torch.int64, device=device)}
++    worker = None
++    try:
++        with RecordedPreparationSession(device=device, checkpoint="vocabulary-test",
++                workload_schema="column-gather-v1", numerical_policy="default", coordinator=coordinator,
++                compile_workers=max(2, world)) as session:
++            for rows in (4, 1):
++                result = output if indexed else output[:rows]
++                heads[rows] = PreparedVocabularyProjection(source[:rows], weight, local[:rows], result,
++                    runtime=runtime, session=session, coordinator=coordinator, name=f"head{rows}", row_indices=indices)
++            session.tune()
++            stream = torch.cuda.Stream(device=device)
++            pool = torch.cuda.graph_pool_handle()
++            for rows, head in heads.items():
++                compiled[rows] = compile_forward(lambda head=head, rows=rows: head(source[:rows]))
++                compiled[rows]()
++                torch.cuda.synchronize(device)
++                stream.wait_stream(torch.cuda.current_stream(device))
++                graph = torch.cuda.CUDAGraph()
++                with session.capture(), torch.cuda.graph(graph, stream=stream, pool=pool):
++                    compiled[rows]()
++                graphs[f"head{rows}"] = graph
++            session.freeze()
++            bundle = PreparedExecution(device=rank, graphs=graphs,
++                signatures={f"head{rows}": GraphSignature("decode", rows, 1) for rows in heads},
++                buffers=control,
++                resources=(heads, compiled, runtime, session, stream, pool, weight))
++            worker = bundle.start_executor()
++            iterations = int(os.environ.get("GATHER_STRESS_ITERS", "3000"))
++            bad = 0
++            for it in range(iterations):
++                rows = 1 if it % 3 else 4
++                gen = torch.Generator(device=device).manual_seed(1000 + it)
++                source.copy_(torch.randn(capacity, hidden, dtype=torch.bfloat16, device=device, generator=gen) * .125)
++                expected = (source[:rows].float() @ full_weight.float().T).to(output_dtype)
++                output.fill_(float("nan"))
++                torch.cuda.synchronize(device)
++                ticket = worker.submit(bundle.graph_indices[f"head{rows}"], [])
++                completion = worker.poll()
++                while completion is None:
++                    time.sleep(.0002)
++                    completion = worker.poll()
++                torch.cuda.synchronize(device)
++                diff = (output[:rows].float() - expected.float()).abs()
++                if not (diff.max() <= .002 + .016 * expected.float().abs().max()) or output[:rows].isnan().any():
++                    bad += 1
++                    if bad <= 5:
++                        cols = (diff > .05).any(0).nonzero().flatten()
++                        print(f"rank {rank} iter {it} rows {rows}: max diff {diff.max().item():.3f}, bad columns {cols.numel()} "
++                              f"range {cols.min().item() if cols.numel() else -1}..{cols.max().item() if cols.numel() else -1}, nan {output[:rows].isnan().sum().item()}", flush=True)
++            print(f"rank {rank}: {bad} bad of {iterations} replays", flush=True)
++            worker.close()
++            worker = None
++            for graph in graphs.values():
++                graph.reset()
++    finally:
++        if worker is not None:
++            worker.close()
++        for graph in graphs.values():
++            graph.reset()
++        runtime.close()
++        dist.destroy_process_group()
++
++
++@pytest.mark.parametrize("world", [2, 3, 4])
++@pytest.mark.parametrize("vocab", [154880, 128896])
++def test_sharded_vocabulary_native_replay(world, vocab, tmp_path):
++    assert os.environ.get("CUDA_VISIBLE_DEVICES")
++    if torch.cuda.device_count() < world:
++        pytest.skip(f"requires {world} assigned CUDA devices")
++    mp.spawn(_rank, args=(world, (tmp_path / "rendezvous").as_uri(), vocab), nprocs=world, join=True)
++
++
++def test_sharded_vocabulary_expands_rows_after_gather_under_native_replay(tmp_path):
++    assert os.environ.get("CUDA_VISIBLE_DEVICES")
++    if torch.cuda.device_count() < 4:
++        pytest.skip("requires four assigned CUDA devices")
++    mp.spawn(_rank, args=(4, (tmp_path / "rendezvous").as_uri(), 129280, True), nprocs=4, join=True)
++
++
++def test_fp32_vocabulary_expands_rows_after_gather_under_native_replay(tmp_path):
++    assert os.environ.get("CUDA_VISIBLE_DEVICES")
++    if torch.cuda.device_count() < 2:
++        pytest.skip("requires two assigned CUDA devices")
++    mp.spawn(_rank, args=(2, (tmp_path / "rendezvous").as_uri(), 129280, True, torch.float32),
++             nprocs=2, join=True)
++
++
++@pytest.mark.parametrize("world", [2, 3, 4])
++@torch.no_grad()
++def test_quantized_draft_shards_preserve_logits_under_compiled_replay(world):
++    from b12x.preparation import PreparationSession
++    from ignition.components.vocabulary import PreparedVocabularyProjection, nvfp4_draft_head
++    from ignition.preparation.compilation import compile_forward
++
++    assert os.environ.get("CUDA_VISIBLE_DEVICES")
++    device = torch.device("cuda", 0)
++    capacity, vocab, hidden = 4, 768, 256
++    levels = torch.tensor([0., .5, 1., 1.5, 2., 3., 4., 6.,
++                           0., -.5, -1., -1.5, -2., -3., -4., -6.], device=device)
++    codes = (torch.arange(vocab, device=device)[:, None]
++             + 3 * torch.arange(hidden, device=device)[None, :]) % 16
++    # Every scale block contains +/-6, so NVFP4 represents these weights exactly.
++    weight = levels[codes].bfloat16()
++    original = weight.clone()
++    source = torch.zeros(capacity, hidden, dtype=torch.bfloat16, device=device)
++    output = torch.empty(capacity, vocab, dtype=torch.bfloat16, device=device)
++    shards = [nvfp4_draft_head(part.contiguous()) for part in weight.chunk(world)]
++    graphs, compiled, heads = {}, {}, {}
++    stream = torch.cuda.Stream(device=device)
++    try:
++        with PreparationSession(device=device, autotune=False, compile_workers=2) as session:
++            for rows in (1, capacity):
++                heads[rows] = []
++                width = vocab // world
++                for rank, shard in enumerate(shards):
++                    local = torch.empty(rows, width, dtype=source.dtype, device=device)
++                    heads[rows].append(PreparedVocabularyProjection(source[:rows], shard, local,
++                        output[:rows, rank * width:(rank + 1) * width], runtime=None,
++                        session=session, coordinator=None, name=f"draft{rows}.shard{rank}"))
++
++                def forward(rows=rows):
++                    for head in heads[rows]:
++                        head(source[:rows])
++
++                compiled[rows] = compile_forward(forward)
++                compiled[rows]()
++                torch.cuda.synchronize(device)
++                stream.wait_stream(torch.cuda.current_stream(device))
++                graph = torch.cuda.CUDAGraph()
++                with session.capture(), torch.cuda.graph(graph, stream=stream):
++                    compiled[rows]()
++                graphs[rows] = graph
++            session.freeze()
++            for turn, rows in enumerate((1, capacity, 1, capacity)):
++                source.copy_(torch.sin(torch.arange(source.numel(), device=device)
++                    .reshape_as(source).float() + turn).bfloat16())
++                expected = (source[:rows].float() @ weight.float().T).bfloat16()
++                output.fill_(float("nan"))
++                torch.cuda.synchronize(device)
++                before = torch.cuda.memory_stats(device)["allocation.all.allocated"]
++                graphs[rows].replay()
++                torch.cuda.synchronize(device)
++                assert torch.cuda.memory_stats(device)["allocation.all.allocated"] == before
++                torch.testing.assert_close(output[:rows], expected, rtol=.016, atol=.002)
++                assert output[rows:].isnan().all()
++            assert torch.equal(weight, original)
++    finally:
++        stream.synchronize()
++        for graph in graphs.values():
++            graph.reset()
+diff --git a/tests/components/test_vocabulary_sampling_tp3_cuda.py b/tests/components/test_vocabulary_sampling_tp3_cuda.py
+new file mode 100644
+index 0000000..e4f3da9
+--- /dev/null
++++ b/tests/components/test_vocabulary_sampling_tp3_cuda.py
+@@ -0,0 +1,152 @@
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++
++"""TP3 copy (ds41-tp3-v2): parametrized over world 2 and 3. Distributed probability normalization and rejection over real vocabulary shards."""
++
++import os
++from datetime import timedelta
++
++import pytest
++import torch
++import torch.distributed as dist
++import torch.multiprocessing as mp
++
++pytestmark = pytest.mark.skipif(os.environ.get("FLARE_RUN_TP_CUDA_TESTS") != "1",
++                               reason="requires two explicitly assigned CUDA devices")
++
++
++def _rank(rank, rendezvous, fp8, world=3):
++    from ignition.components.sampling import DeviceRequestState, RUNNING
++    from ignition.components.speculation import DRAFT_RNG_DOMAIN, SpeculativeRngState
++    from ignition.components.vocabulary_sampling import PreparedVocabularySoftmax, PreparedVocabularyBlockVerification
++    from ignition.preparation.collectives import CollectivePreparation, create_all_gather_runtime
++    from ignition.preparation.compilation import compile_forward
++    from ignition.preparation.graphs import PreparedGraphBundle
++    from ignition.preparation.tuning import RecordedPreparationSession
++
++    torch.cuda.set_device(rank)
++    device = torch.device("cuda", rank)
++    dist.init_process_group("gloo", init_method=rendezvous, rank=rank, world_size=world,
++                            timeout=timedelta(minutes=3))
++    coordinator = CollectivePreparation(dist.group.WORLD)
++    b, d, v, features = 2, 2, 1025, 64
++    local = 576 if world == 2 else 384  # each shard 64-aligned; local*(world-1) < v <= local*world
++    runtime = create_all_gather_runtime(dist.group.WORLD, device, max_rows=b * (d + 1), columns=64 * world)
++    generator = torch.Generator().manual_seed(125)
++    full_base = torch.randn(b, d, v, generator=generator).to(device, torch.bfloat16)
++    full_target = torch.randn(b, d + 1, v, generator=generator).to(device)
++    embedding = (torch.randn(v, features, generator=generator) / 8).to(device, torch.bfloat16)
++    head = (torch.randn(v, features, generator=generator) / 8).to(device, torch.bfloat16)
++    covered, start = min(local, v - rank * local), rank * local
++    base = torch.full((b, d, local), 1000., device=device, dtype=torch.bfloat16)
++    base[:, :, :covered].copy_(full_base[:, :, start:start + covered])
++    logits = torch.full((b, d + 1, local), 1000., device=device)
++    logits[:, :, :covered].copy_(full_target[:, :, start:start + covered])
++    local_head = torch.zeros(local, features, device=device, dtype=torch.bfloat16)
++    local_head[:covered].copy_(head[start:start + covered])
++    if fp8:
++        from ignition.components.markov_sampling import fp8_markov_head
++
++        local_head = fp8_markov_head(local_head)
++        full_fp8 = fp8_markov_head(head)
++        head = (full_fp8.values.float() * full_fp8.scale[:, None]).contiguous()
++    state = DeviceRequestState.allocate(device, vocab_size=v, capacity=b)
++    state.status.fill_(RUNNING)
++    state.generation.fill_(7)
++    state.seed.copy_(torch.arange(b, device=device, dtype=torch.int64) + 123)
++    state.parameters.copy_(torch.tensor([1., 1., 0., 1., 0., 0.], device=device))
++    state.top_k.fill_(-1)
++    slots = torch.arange(b, device=device, dtype=torch.int32)
++    epochs = torch.full((b,), 7, device=device, dtype=torch.int64)
++    live = torch.tensor([b], device=device, dtype=torch.int32)
++    tokens = torch.zeros(b, d, device=device, dtype=torch.int64)
++    q = torch.empty(b, d, local, device=device)
++    p = torch.empty(b, d + 1, local, device=device)
++    qvalid = torch.empty(b, d, device=device, dtype=torch.bool)
++    pvalid = torch.empty(b, d + 1, device=device, dtype=torch.bool)
++    seeds = state.seed.view(torch.int64) ^ DRAFT_RNG_DOMAIN
++    offsets = torch.full((b,), 2**32, device=device, dtype=torch.int64)
++    pending = torch.zeros(b, device=device, dtype=torch.int64)
++    rng = SpeculativeRngState.allocate(device, capacity=b)
++    rng.generation.fill_(7)
++    graph = worker = None
++    try:
++        with RecordedPreparationSession(device=device, checkpoint="vocabulary-block-test",
++                workload_schema="summary-shards-v1", numerical_policy="fp32", coordinator=coordinator) as session:
++            options = dict(start=start, runtime=runtime, session=session, coordinator=coordinator)
++            proposal = PreparedVocabularySoftmax(base, q, qvalid, state, slots, epochs, live, tokens,
++                **options, name="proposal", embedding=embedding, head=local_head, pending=pending,
++                seeds=seeds, offsets=offsets, tokens=tokens)
++            target = PreparedVocabularySoftmax(logits, p, pvalid, state, slots, epochs, live, tokens,
++                **options, name="target")
++            verify = PreparedVocabularyBlockVerification(q, tokens, p, state, slots, epochs, live,
++                **options, name="verify", rng=rng, draft_valid=qvalid, target_valid=pvalid)
++            proposal.prepare()
++            target.prepare()
++            verify.prepare()
++            hashes = [None] * world
++            dist.all_gather_object(hashes, [step[0].compiled.hash for step in proposal.steps]
++                                   + [target.steps[0][0].compiled.hash, verify.kernels[2].compiled.hash])
++            assert all(h == hashes[0] for h in hashes)
++            session.tune(show_progress=False)
++
++            class Pipeline:
++                def __call__(self):
++                    proposal()
++                    target()
++                    verify()
++
++            call = compile_forward(Pipeline())
++            call()
++            torch.cuda.synchronize()
++            stream = torch.cuda.Stream()
++            stream.wait_stream(torch.cuda.current_stream())
++            graph = torch.cuda.CUDAGraph()
++            with session.capture(), torch.cuda.graph(graph, stream=stream):
++                call()
++            bundle = PreparedGraphBundle(device=rank, graphs={"sampling": graph}, buffers={},
++                                         resources=(proposal, target, verify, call, session, runtime))
++            worker = bundle.start_worker()
++            for iteration in range(4):
++                state.status[1] = 0 if iteration == 2 else RUNNING
++                offsets.add_(8)
++                rng.target_offset.add_(verify.draw_reservation)
++                q.fill_(float("nan"))
++                p.fill_(float("nan"))
++                torch.cuda.synchronize()
++                allocated = torch.cuda.memory_stats()["allocation.all.allocated"]
++                dist.barrier()
++                ticket = worker.submit(0)
++                result = worker.poll(10000)
++                assert result is not None and result.error is None and result.ticket == ticket
++                assert torch.cuda.memory_stats()["allocation.all.allocated"] == allocated
++                assert verify.output.valid.tolist() == [True, iteration != 2]
++                expected_p = full_target.double().softmax(-1)
++                torch.testing.assert_close(p[0, :, :covered].double(), expected_p[0, :, start:start + covered],
++                                           rtol=3e-6, atol=1e-9)
++                previous = pending
++                for step in range(d):
++                    score = full_base[:, step].double() + embedding[previous].double() @ head.double().T
++                    expected_q = score.softmax(-1)
++                    torch.testing.assert_close(q[0, step, :covered].double(), expected_q[0, start:start + covered],
++                                               rtol=3e-5, atol=1e-8)
++                    previous = tokens[:, step]
++                peers = [None] * world
++                dist.all_gather_object(peers, verify.output.token_ids.cpu().tolist())
++                assert all(peer == peers[0] for peer in peers)
++            dist.barrier()
++    finally:
++        if worker is not None:
++            worker.close()
++        if graph is not None:
++            graph.reset()
++        runtime.close()
++        dist.destroy_process_group()
++
++
++@pytest.mark.parametrize("fp8", [False, True])
++@pytest.mark.parametrize("world", [2, 3])
++def test_tp_vocabulary_sampling_native_replay(tmp_path, fp8, world):
++    if torch.cuda.device_count() < world:
++        pytest.skip("requires two explicitly assigned CUDA devices")
++    mp.spawn(_rank, args=((tmp_path / "rendezvous").as_uri(), fp8, world), nprocs=world, join=True)
