@@ -135,8 +135,12 @@ All with `llm-inference-bench` v0.9.1 (Flare detected from metrics), 350 W, Engr
 | Prefill 8K / 32K / 128K | 10,977 / 12,548 / 12,160 tok/s (TTFT 0.75 / 2.57 / 10.57 s) |
 | Coding peak (5 runs, median) | 378.8 tok/s (range 350-417) |
 
-**Alternative export** (`HOT=313 PREFILL=2048 ./export.sh`): 313 hot experts, 2048-token prefill chunks, **3.47M KV**. Decode ~255 / ~615 / ~819 tok/s, prefill 32K / 128K 10,842 / 10,611 tok/s. Pick it for more
-simultaneous long sessions.
+**Alternative exports.** Both build from the same checkpoint with `export.sh`; only the hot-expert count and prefill chunk change.
+
+| Export | KV tokens | Decode 32K c1 / c4 / c8 | Prefill 32K / 128K | Pick it for |
+| --- | --- | --- | --- | --- |
+| `HOT=267 PREFILL=4096` | **6.05M** | 237 / 510 / 688 tok/s (89.8 / 54.7 / 40.3 steps/s) | 11,707 / 11,673 tok/s | six simultaneous 1M-token sessions; ~7% slower at c1, ~15% at c8. Corruption check clean |
+| `HOT=313 PREFILL=2048` | 3.47M | ~255 / ~615 / ~819 tok/s | 10,842 / 10,611 tok/s | a bit more KV than the release at the same decode speed, ~15% slower prefill |
 
 ## Quality and long context
 

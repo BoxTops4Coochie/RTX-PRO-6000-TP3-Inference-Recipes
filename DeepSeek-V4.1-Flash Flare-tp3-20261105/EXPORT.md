@@ -114,7 +114,8 @@ cached) → compile (~3 min) → graph capture → weight payloads written (~3 m
 
 | `HOT` | `PREFILL` | KV tokens | Notes |
 | --- | --- | --- | --- |
-| 300 | 4096 | 2.99M | **this release** |
+| 300 | 4096 | 2.99M | **this release**: 32K decode 254 / 595 / 805 tok/s at c1 / c4 / c8 (93.8 / 62.0 / 48.1 steps/s) |
+| 267 | 4096 | 6.05M | **long-context alternate**: six 1M-token sessions. 32K decode 237 / 510 / 688 tok/s (89.8 / 54.7 / 40.3 steps/s), about 7% / 14% / 15% slower; prefill ~5% slower (11.7K tok/s at 32K and 128K); corruption check clean |
 | 310 | 4096 | 2.07M | decode within noise of 300 |
 | 313 | 2048 | 3.47M | most KV; prefill ~15% slower |
 | 326 | 2048 | 2.26M | |
@@ -139,6 +140,9 @@ cd llm-inference-bench && .venv/bin/python llm_decode_bench.py --port 15015 --mo
   --concurrency 1,4,8 --contexts 32k --duration 60 --output result.json
 python3 /path/to/this-folder/tools/bench_steps.py result.json   # steps/s and tokens/step per cell
 ```
+
+Optional: `tools/llm-bench-flare-steps.patch` (`git apply` inside `llm-inference-bench`, tested on v0.9.1) makes the
+benchmark's own summary show the "MTP-normalized decode steps/s" table for Flare, computed from Flare's draft-round counters.
 
 ## 6. Troubleshooting
 
