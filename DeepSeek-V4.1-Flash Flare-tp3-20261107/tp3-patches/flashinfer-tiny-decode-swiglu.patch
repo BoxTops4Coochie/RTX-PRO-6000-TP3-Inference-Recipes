@@ -1,0 +1,45 @@
+--- a/flashinfer/experimental/b12x/moe/fused_moe/_impl.py
++++ b/flashinfer/experimental/b12x/moe/fused_moe/_impl.py
+@@ -2612,6 +2612,9 @@
+     activation: str,
+     source_format: str,
+     deterministic_output: bool = False,
++    swiglu_limit=None,
++    swiglu_alpha=None,
++    swiglu_beta=None,
+ ) -> bool:
+     source_format = _canonical_moe_policy_source_format(source_format)
+     if source_format == "b12x_trellis":
+@@ -2638,6 +2641,12 @@
+         )
+     return (
+         not deterministic_output
++        # tiny_decode implements plain SiLU-GLU only: it has no SwiGLU clamp (swiglu_limit) or
++        # alpha/beta, so selecting it for e.g. DeepSeek V4.1 (limit 10) leaves large expert
++        # activations unclamped and corrupts that decode step (flare#193).
++        and swiglu_limit is None
++        and swiglu_alpha is None
++        and swiglu_beta is None
+         and _tiny_decode_enabled()
+         and _tiny_decode_supports(
+             num_tokens=num_tokens,
+@@ -2661,6 +2670,9 @@
+         activation=query.activation,
+         source_format=query.source_format,
+         deterministic_output=query.deterministic_output,
++        swiglu_limit=query.swiglu_limit,
++        swiglu_alpha=query.swiglu_alpha,
++        swiglu_beta=query.swiglu_beta,
+     ):
+         return False
+     if (
+@@ -2702,6 +2714,9 @@
+             activation=query.activation,
+             source_format=query.source_format,
+             deterministic_output=query.deterministic_output,
++            swiglu_limit=query.swiglu_limit,
++            swiglu_alpha=query.swiglu_alpha,
++            swiglu_beta=query.swiglu_beta,
+         )
+     return _band_runs_direct_micro(
+         num_tokens=query.num_tokens,

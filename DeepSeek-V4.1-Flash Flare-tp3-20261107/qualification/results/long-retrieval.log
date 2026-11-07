@@ -1,0 +1,4 @@
+START 128000 actual prompt 127986
+DONE 128000 {"passed": true, "strict_json": true, "actual": {"A": "ALPHA-R34-7K2M9Q", "B": "BETA-R34-8P6V3X", "C": "GAMMA-R34-4T9N2Z"}, "expected": {"A": "ALPHA-R34-7K2M9Q", "B": "BETA-R34-8P6V3X", "C": "GAMMA-R34-4T9N2Z"}, "usage": {"prompt_tokens": 127986, "completion_tokens": 127, "total_tokens": 128113, "prompt_tokens_details": {"cached_tokens": 1}, "completion_tokens_details": {"reasoning_tokens": 80}}, "finish_reason": "stop"}
+START 900000 actual prompt 899988
+DONE 900000 {"passed": true, "strict_json": true, "actual": {"A": "ALPHA-R34-7K2M9Q", "B": "BETA-R34-8P6V3X", "C": "GAMMA-R34-4T9N2Z"}, "expected": {"A": "ALPHA-R34-7K2M9Q", "B": "BETA-R34-8P6V3X", "C": "GAMMA-R34-4T9N2Z"}, "usage": {"prompt_tokens": 899988, "completion_tokens": 119, "total_tokens": 900107, "prompt_tokens_details": {"cached_tokens": 1}, "completion_tokens_details": {"reasoning_tokens": 72}}, "finish_reason": "stop"}

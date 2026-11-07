@@ -1,0 +1,5 @@
+[flare-v3-2x-c8] capacity=2,373,760 tok -> 2 waves x 8 x ~530,000 tok unique prompts (+ pinger)
+  wave 1/2: 8/8 ok, 4,757,219 prompt tok, 439s, minfree so far 82 MiB
+  wave 2/2: 8/8 ok, 4,756,617 prompt tok, 446s, minfree so far 82 MiB
+(Flare log: 0 preemption lines, reported separately)
+[flare-v3-2x-c8] PASS: 16/16 long requests ok, pinger 136/136 ok, 9,513,836 prompt tok pushed, min free VRAM 82 MiB (437 samples), health=200, bad log lines=0, wall 14.8 min

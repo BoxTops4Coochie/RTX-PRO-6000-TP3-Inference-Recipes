@@ -1,0 +1,13 @@
+Using release 2024-11-25
+{'coding': ['LCB_generation', 'coding_completion']}
+loaded  128  questions
+
+########## All Tasks ##########
+task                             LCB_generation  coding_completion
+model                                                             
+deepseek-v4.1-flash-flare-v3-2x          74.359               90.0
+
+########## All Groups ##########
+category                         coding
+model                                  
+deepseek-v4.1-flash-flare-v3-2x    82.2
