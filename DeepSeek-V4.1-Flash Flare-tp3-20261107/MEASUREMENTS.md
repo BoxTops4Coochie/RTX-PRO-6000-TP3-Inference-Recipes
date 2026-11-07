@@ -28,8 +28,20 @@ Each column is the mean of the user's runs: 3 at 350 W, 2 at 450 W. Memory offse
 | Prefill 32K / 128K | 12,931 / 12,844 | 14,507 / 14,645 | +12% / +14% |
 | Coding mean | 432 | 482 | +12% |
 
-On vLLM, the extra power only helped prefill (~+10%); decode was flat. On Flare it helps decode too. Everything below
-was measured at **450 W, +75 core, +6000 memory**.
+On vLLM, the extra power only helped prefill (~+10%); decode was flat. On Flare it helps decode too.
+
+**600 W (user, 1 run, release defaults, +75 / +6000):**
+
+| 32K | 450 W (2-run mean) | 600 W | change |
+| --- | --- | --- | --- |
+| c1 / c4 / c8 tok/s | 305 / 716 / 975 | 296.9 / 757.1 / 1,002.2 | −3% / +6% / +3% |
+| c1 / c4 / c8 steps/s (per stream) | 118.8 / 70.9 / 50.7 | 115.1 / 72.3 / 56.1 | |
+| Coding mean | 465 | 460 | same |
+| GPU power at c8, all three cards | ~1,350 W | ~1,594 W | +240 W |
+
+Within a few percent of 450 W (c1 and coding flat; c4/c8 inside the 2-3% run-to-run spread or just above), for about
+240 W more. 450 W stays the recommended setting. Everything else on this page was measured at **450 W, +75 core,
++6000 memory**.
 
 ## Release defaults (user, 450 W / +75 / +6000, k5, alpha 0.8, balanced)
 

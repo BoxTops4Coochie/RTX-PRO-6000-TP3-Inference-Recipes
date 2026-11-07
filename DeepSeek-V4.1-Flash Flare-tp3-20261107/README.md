@@ -75,7 +75,9 @@ speed with draft acceptance divided out; tok/s also depends on how predictable t
 What matters most for speed, in our measurements:
 
 - **Power.** On Flare, 450 W over 350 W is **+10-14% decode, +12-14% prefill, +12% coding** on this build. On the vLLM
-  build only prefill gained. Export at the power and clocks you will serve with: kernel tuning measures the cards as they run.
+  build only prefill gained. **600 W is not worth it:** one run at 600 W measured 297 / 757 / 1,002 tok/s at c1 / c4 / c8
+  and coding 460 (450 W: 305 / 716 / 975, coding 465), within a few percent and about 240 W more at c8. Export at the
+  power and clocks you will serve with: kernel tuning measures the cards as they run.
 - **GPU memory clock.** Decode reads weights every step; the +6000 offset is part of every number here.
 - **PCIe generation and topology.** The three GPUs exchange data twice per layer over PCIe (no NVLink), and cold experts
   stream from host RAM over PCIe. Gen5 x16 per GPU on one CPU root complex is the tested setup.
