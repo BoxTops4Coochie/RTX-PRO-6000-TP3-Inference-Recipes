@@ -5,7 +5,46 @@ DeepSeek-V4.1-Flash-1017 has two Engram n-gram tables (layers 1 and 14). DeepSee
 release carries them in MXFP4 (48.6 GiB each, 97 GiB total). That format is lossy: packed E2M1 values with E8M0 block
 scales recomputed per 32 values. Every measurement here from vLLM Kraken `20261019.4` on (served with the
 `engram-nvidia` weights) and both Flare releases used the MXFP4 tables. This page collects every measurement we have of the two side by side. They come from different releases and stacks,
-so read it as a record of results, not a controlled study.
+so read it as a record of results, not a controlled study, except for the direct A/B below, which is one.
+
+**Summary.** MXFP4 Engram is lossy, and the loss is measurable where Engram matters most: on fact-dense encyclopedia
+text, perplexity rises 2.6% and the predicted distributions move about twice as far from FP8 as FP8 moves from
+itself between runs. On code there is no measurable change. None of it shows up in answers: TriviaQA, MMLU-Pro,
+LiveBench and the reasoning checks all stay within run-to-run noise.
+
+## Direct A/B on one build (2026-11-07)
+
+Same engine, same day, only the Engram tables changed: vLLM Kraken TP3 `.11` served the stock checkpoint (FP8 tables;
+layer 1 in RAM, layer 14 from disk) and then the `engram-nvidia` variant (NVIDIA's MXFP4 tables, both in RAM). FP8 ran
+twice to measure the engine's own run-to-run noise. vLLM is not bit-reproducible on this stack (fused kernels sum
+with float atomics), so two FP8 runs already disagree slightly, and MXFP4 is judged against that floor.
+
+**Teacher-forced next-token probabilities** on 197 fixed 1024-token passages (117 WikiText-103 articles, 80 source
+files; 201,531 scored positions), top-20 prompt logprobs at every position. KL is estimated over the reference top-20
+plus a residual bucket.
+
+| | FP8 run 1 vs FP8 run 2 (noise floor) | FP8 vs MXFP4 |
+| --- | --- | --- |
+| Encyclopedia text: top-1 agreement | 95.5% | **93.8%** |
+| Encyclopedia text: mean KL (nats/token) | 0.024 | **0.055** |
+| Encyclopedia text: perplexity | 2.735 → 2.737 (+0.07%) | 2.735 → **2.805 (+2.6%)** |
+| Code: top-1 agreement | 96.7% | 96.2% |
+| Code: mean KL | 0.010 | 0.013 |
+| Code: perplexity | 2.911 → 2.913 (+0.05%) | 2.911 → 2.907 (−0.2%) |
+
+**Benchmarks**, thinking off, greedy (temperature 0) on vLLM. TriviaQA: 1,000 rc.nocontext validation questions,
+normalized exact match against the answer aliases ("contains": an alias appears in the answer). MMLU-Pro: 1,000
+questions stratified over its 14 categories, answer letter taken from the reply (up to 2,048 tokens).
+
+| | FP8 run 1 | FP8 run 2 | MXFP4 | Flare 20261107 run 1 | Flare 20261107 run 2 |
+| --- | --- | --- | --- | --- | --- |
+| TriviaQA exact / contains (of 1,000) | 836 / 881 | 844 / 886 | **838 / 882** | 838 / 880 | 838 / 882 |
+| MMLU-Pro (of 1,000) | 774 | 774 | **768** | 776 | 766 |
+
+Flare samples DeepSeek at temperature 1.0 (it does not allow 0), so its runs show the MXFP4 release build with sampling
+noise rather than a greedy A/B. Question-level churn: the two FP8 runs both scored 774 on MMLU-Pro while 26 questions
+flipped each way; FP8 against MXFP4 flipped 33 one way and 27 the other. On the 980 distinct TriviaQA questions, FP8
+run 1 vs run 2 differed by 1 / 9 and FP8 vs MXFP4 by 7 / 10 and 11 / 6. Both benchmark gaps sit inside that churn.
 
 ## How different the tables are
 
@@ -19,7 +58,7 @@ so read it as a record of results, not a controlled study.
 Greedy open-ended generations diverge from FP8 after the first token whose probability shifts slightly. This is
 the expected fingerprint of a lossy table. In the checks we read, the content stayed equivalent.
 
-## Quality scores
+## Release-by-release scores
 
 Same harness and settings across releases: thinking on, `reasoning_effort` max, temperature 1, top-p 1.0, seed 103
 for the profile runs, unless noted. LiveBench is coding, release 2024-11-25, 32K budget, temperature 1.
@@ -37,8 +76,7 @@ for the profile runs, unless noted. LiveBench is coding, release 2024-11-25, 32K
 
 LiveBench at temperature 1 moves by a question or two between runs. Six vLLM runs spanned 81.5-83.2, and every
 miss was a complete wrong answer on mostly the same hard questions. The single FP8 run (81.3) sits at the bottom of
-that range, and the MXFP4 runs span 81.5-84.2. **We see no quality difference between the two formats beyond
-run-to-run noise.**
+that range, and the MXFP4 runs span 81.5-84.2: no difference beyond run-to-run noise.
 
 The vLLM tags also differ in kernels and features (BRRR fused decoder from `.6`, sparse attention in `.10`), and the
 Flare releases are a different runtime. Several MXFP4 rows therefore compare different builds; the like-for-like rows
@@ -54,7 +92,9 @@ are vLLM stock / `.3` against `.4` / `.5`, which changed only the Engram tables.
 
 ## Not measured
 
-- Knowledge-heavy benchmarks beyond the 43-question eval (for example MMLU-style or long-tail factual recall), where
-  a lossy n-gram table would most plausibly show up.
-- An FP8 Engram build on Flare with the full qualification suite; Flare FP8 builds only had corruption checks.
-- A same-build, same-day A/B of FP8 vs MXFP4 on LiveBench with several runs per side.
+- An FP8 Engram build on Flare with the full qualification suite; Flare FP8 builds only had corruption checks. (The
+  tables are the same files on both engines; the direct A/B above ran on vLLM because it returns prompt logprobs and
+  allows greedy decoding.)
+- Long-tail factual recall beyond TriviaQA (rare entities, exact dates and numbers), where the 2.6% perplexity rise
+  on encyclopedia text would most plausibly turn into wrong answers.
+- A same-build A/B of FP8 vs MXFP4 on LiveBench with several runs per side.
