@@ -213,6 +213,7 @@ CKPT=ckpt/ ./export.sh           # the release build, HOT=342
 | --- | --- |
 | `EXPORT.md` | how to build the package yourself |
 | `MEASUREMENTS.md` | every measurement of this build: power, settings sweeps, k5 vs k7, prefix cache, Engram on disk |
+| `ENGRAM-PRECISION.md` | MXFP4 vs FP8 Engram tables: every quality score we have for each, from the vLLM and Flare releases |
 | `serve.sh` / `export.sh` | serve the package / export it from a checkpoint view |
 | `make_checkpoint_view.sh`, `checkpoint/` | build the checkpoint from the two public releases (config + corrected index) |
 | `source.patch` | the fork's changes against Flare `972e28e4` (45 files, including the adapted `brrr/` kernels) |
