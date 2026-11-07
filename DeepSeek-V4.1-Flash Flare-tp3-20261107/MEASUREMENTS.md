@@ -17,7 +17,7 @@ automated sweep with one minute between runs.
 
 ## Power and clocks (user)
 
-Each column is the mean of the user's runs: 3 at 350 W, 2 at 450 W. Memory offset +6000 MHz in both.
+Each column is the mean of the user's runs: 3 at 350 W, 2 at 450 W. Memory offset +6000 MHz in both; alpha 0.6 (the setting before the sweep).
 
 | | 350 W, +0 core | 450 W, +75 core | change |
 | --- | --- | --- | --- |
@@ -30,6 +30,19 @@ Each column is the mean of the user's runs: 3 at 350 W, 2 at 450 W. Memory offse
 
 On vLLM, the extra power only helped prefill (~+10%); decode was flat. On Flare it helps decode too. Everything below
 was measured at **450 W, +75 core, +6000 memory**.
+
+## Release defaults (user, 450 W / +75 / +6000, k5, alpha 0.8, balanced)
+
+Two runs of `llm_decode_bench` at 32K plus single runs at 128K and 512K, on `serve.sh` as shipped.
+
+| | 32K run 1 | 32K run 2 | 128K | 512K |
+| --- | --- | --- | --- | --- |
+| c1 / c2 / c4 / c8 tok/s | 313.7 / 496.4 / 727.4 / 971.0 | 296.4 / 479.2 / 704.7 / 979.0 | 295.5 / — / 708.1 / 956.0 | 275.2 / — / 657.3 / — |
+| c1 / c2 / c4 / c8 steps/s (aggregate) | 116.0 / 195.1 / 284.0 / 409.3 | 121.5 / 200.3 / 283.0 / 402.4 | 112.8 / — / 298.1 / 396.4 | 110.9 / — / 271.8 / — |
+| Prefill 32K / 128K | 15,081 / 14,670 | 14,529 / 14,567 | | |
+| Coding mean / max | 467 / 477 | 462 / 501 | | |
+
+32K mean: 305 / 488 / 716 / 975 tok/s, prefill 14,805 / 14,619. Steps/s here is summed over the streams (c4 284 = ~71 per stream).
 
 ## Speculation settings sweep
 

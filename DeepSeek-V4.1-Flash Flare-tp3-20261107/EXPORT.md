@@ -126,7 +126,7 @@ about **92K KV tokens**. Decode gets slower because more experts stream over PCI
 
 | `HOT` | KV tokens | Measured (350 W, natural EOS, 32K c1 / c4 / c8) |
 | --- | --- | --- |
-| **342** | **2,373,760** | 288 / 634 / 838 tok/s (**this release**; 298-303 / 719-738 / 957-959 at 450 W, user command) |
+| **342** | **2,373,760** | 288 / 634 / 838 tok/s (**this release**; 298-305 / 716-738 / 957-975 at 450 W, user command) |
 | 300 | 6,247,680 | 269 / 610 / 800 tok/s: 4-7% slower, corruption check clean |
 
 > **Disclaimer.** Other values were not measured on this fork. Expect KV ≈ 2.37M + (342 − HOT) × 92K tokens, and a
